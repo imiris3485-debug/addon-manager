@@ -1,0 +1,100 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.2'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.shapinel'
+version = '0.0.1-SNAPSHOT'
+description = 'addon-manager'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // --- Web / API ---
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.0'
+
+    // --- Security / JWT ---
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+
+    // --- DB (MariaDB + JPA + MyBatis) ---
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:4.0.0'
+    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
+
+    // --- MongoDB / WebSocket ---
+    // MongoDB 는 아직 사용하는 코드가 없어 잠시 비활성화. 채팅 등을 만들 때 주석을 풀고
+    // application.yml 의 spring.mongodb.uri 설정도 함께 복구한다.
+    // implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+
+    // --- Retry ---
+    implementation 'org.springframework.retry:spring-retry:2.0.12'
+    implementation 'org.springframework:spring-aspects'
+
+    // --- Lombok ---
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // --- Dev / Test ---
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// ---------------------------------------------------------------
+// 프론트(React) 빌드를 jar 에 포함한다: ./gradlew bootJar 한 번으로 화면+API 가 든 jar 가 나온다.
+// Node(npm)가 필요하다. Node 없이 백엔드만 빌드하려면 -PskipFrontend 를 붙인다.
+// ---------------------------------------------------------------
+def frontendDir = file('frontend')
+def npmCommand = { String... args ->
+    org.gradle.internal.os.OperatingSystem.current().isWindows()
+            ? ['cmd', '/c', 'npm'] + args.toList()      // Windows 의 npm 은 npm.cmd 라서 cmd 를 거친다
+            : ['npm'] + args.toList()
+}
+
+tasks.register('npmInstall', Exec) {
+    onlyIf { !project.hasProperty('skipFrontend') }
+    workingDir frontendDir
+    commandLine npmCommand('ci')
+    inputs.files(file('frontend/package.json'), file('frontend/package-lock.json'))
+    outputs.dir(file('frontend/node_modules'))
+}
+
+tasks.register('buildFrontend', Exec) {
+    onlyIf { !project.hasProperty('skipFrontend') }
+    dependsOn 'npmInstall'
+    workingDir frontendDir
+    commandLine npmCommand('run', 'build')
+    inputs.dir(file('frontend/src'))
+    inputs.files(file('frontend/index.html'), file('frontend/vite.config.ts'),
+            file('frontend/tsconfig.json'), file('frontend/package.json'))
+    outputs.dir(file('frontend/dist'))
+}
+
+// Dockerfile 이 고정된 이름으로 복사할 수 있게 한다
+tasks.named('bootJar') {
+    archiveFileName = 'app.jar'
+    if (!project.hasProperty('skipFrontend')) {
+        dependsOn 'buildFrontend'
+        // 프론트 빌드 결과를 Spring 의 정적 리소스 위치(classpath:/static)로 넣는다
+        from(file('frontend/dist')) {
+            into 'BOOT-INF/classes/static'
+        }
+    }
+}

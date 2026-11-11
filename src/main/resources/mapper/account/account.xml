@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shapinel.addonmanager.account.AccountMapper">
+
+    <select id="selectMyInfo"
+            resultType="com.shapinel.addonmanager.account.domain.dto.AccountDtos$MyInfoDto">
+        SELECT id
+             , login_id AS loginId
+             , name
+             , role
+        FROM account
+        WHERE id = #{userId}
+          AND deleted_at IS NULL
+    </select>
+</mapper>
