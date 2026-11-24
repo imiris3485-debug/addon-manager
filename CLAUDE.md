@@ -29,7 +29,7 @@
 - 프론트는 `src/lib/nativeFs.ts` 어댑터로 앱의 `window.addonFs` 를 폴더 핸들처럼 다룬다. 일반 브라우저에서는 기존 File System Access 방식 그대로다.
 - **앱은 화면(웹)을 믿지 않는다.** 요청 출처 검사, 연결 폴더는 `Interface\AddOns` 형태만, 경로는 이름 조각 배열로 받아 `..`·드라이브·링크 거부. 이 검사를 약화시키는 변경은 하지 않는다(`desktop/test` 로 검증).
 - 빌드: `cd desktop && npm run dist`(또는 Gradle `desktopDist`) → `desktop/release/AddonManager-Setup.exe` + `latest.yml`. 자세한 내용은 `desktop/README.md`.
-- 배포: 관리자가 웹 "앱 배포" 메뉴에서 위 두 파일을 올린다(`/api/v1/admin/app-release`, ADMIN 전용, 8MB 조각 업로드). 서버가 SHA-512·크기를 대조해 `DOWNLOADS_DIR` 에 게시하고 `/downloads/**` 로 서빙한다. 앱은 `latest.yml` 로 자동 업데이트한다. 새 빌드 전에 `desktop/package.json` 의 `version` 을 올린다.
+- 배포: 관리자가 웹 "앱 배포" 메뉴에서 위 두 파일을 올린다(`/api/v1/admin/app-release`, ADMIN 전용, 8MB 조각 업로드). 서버가 SHA-512·크기를 대조해 `DOWNLOADS_DIR` 에 게시하고 `/downloads/**` 로 서빙한다. 앱은 `latest.yml` 로 자동 업데이트한다. 버전은 빌드 때 `메이저.마이너.커밋수` 로 자동 결정되므로(`desktop/scripts/dist.js`) **커밋한 뒤 빌드**한다. 직접 올리는 것은 `package.json` 의 메이저.마이너뿐이다.
 - 이 배포 통로는 모든 사용자 PC 에 코드를 보낼 수 있으므로 ADMIN 권한 보호(`AdminReleaseSecurityTest`)와 업로드 검증을 약화시키지 않는다.
 
 ## 코딩 규칙

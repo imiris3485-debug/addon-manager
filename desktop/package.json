@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "tsc && electron .",
     "test": "tsc && node --test \"dist/test/**/*.test.js\"",
-    "dist": "tsc && electron-builder --win --x64 --publish never"
+    "dist": "tsc && node scripts/dist.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

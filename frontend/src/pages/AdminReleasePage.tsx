@@ -89,7 +89,8 @@ export default function AdminReleasePage() {
       </div>
 
       <p className="text-xs text-slate-500">
-        버전은 <code>desktop/package.json</code> 의 version 을 올린 뒤 빌드해야 합니다. 이미 게시된 버전보다 낮은 버전은 올릴 수 없습니다.
+        버전은 빌드할 때 커밋 수로 자동 결정됩니다. 빌드 전에 변경을 커밋해야 새 버전 번호가 붙어 앱이 업데이트를 받습니다.
+        이미 게시된 버전보다 낮은 버전은 올릴 수 없습니다.
       </p>
     </div>
   )
