@@ -1,6 +1,8 @@
 // AddOns 폴더 핸들(File System Access API)을 환경별로 IndexedDB 에 보관한다.
 // 핸들은 이 브라우저에만 존재한다. 다른 PC/브라우저에서는 환경마다 폴더를 다시 선택해야 한다.
 
+import { bindNative, handleFromKey, isDesktop, isNativeHandle, nativeExists, pickNative } from './nativeFs'
+
 const DB_NAME = 'addon-manager'
 const STORE = 'handles'
 
@@ -22,17 +24,27 @@ async function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) =>
   })
 }
 
-export const isFolderAccessSupported = () => 'showDirectoryPicker' in window
+// 데스크톱 앱(Electron)에서 열렸을 때는 브라우저 API 대신 앱이 폴더를 다룬다(nativeFs.ts).
+// 앱은 시스템 폴더 제한이 없고, 한 번 연결한 폴더는 권한 재확인 없이 계속 쓴다.
+export const isFolderAccessSupported = () => isDesktop() || 'showDirectoryPicker' in window
 
 export async function saveHandle(environmentId: number, handle: FileSystemDirectoryHandle) {
+  if (isNativeHandle(handle)) {
+    await bindNative(handle, environmentId)
+    return
+  }
   await withStore('readwrite', (s) => s.put(handle, environmentId))
 }
 
 export async function loadHandle(environmentId: number): Promise<FileSystemDirectoryHandle | undefined> {
+  if (isDesktop()) {
+    return (await nativeExists(environmentId)) ? handleFromKey(String(environmentId)) : undefined
+  }
   return withStore<FileSystemDirectoryHandle | undefined>('readonly', (s) => s.get(environmentId))
 }
 
 export async function deleteHandle(environmentId: number) {
+  if (isDesktop()) return
   await withStore('readwrite', (s) => s.delete(environmentId))
 }
 
@@ -44,12 +56,14 @@ interface PermissionedHandle {
 
 /** 권한 창을 띄우지 않고 이미 허용된 상태인지만 확인한다(자동 스캔 여부 판단용). */
 export async function hasPermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  if (isNativeHandle(handle)) return true
   const h = handle as unknown as PermissionedHandle
   return (await h.queryPermission({ mode: 'readwrite' })) === 'granted'
 }
 
 /** 읽기/쓰기 권한을 확인하고 없으면 요청한다. 사용자 클릭 이벤트 안에서 호출해야 한다. */
 export async function ensurePermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  if (isNativeHandle(handle)) return true
   const h = handle as unknown as PermissionedHandle
   const opts = { mode: 'readwrite' } as const
   if ((await h.queryPermission(opts)) === 'granted') return true
@@ -57,6 +71,12 @@ export async function ensurePermission(handle: FileSystemDirectoryHandle): Promi
 }
 
 export async function pickAddonsFolder(): Promise<FileSystemDirectoryHandle> {
+  if (isDesktop()) {
+    const picked = await pickNative()
+    // 사용자가 선택 창을 닫은 경우를 브라우저와 같은 방식으로 알린다
+    if (!picked) throw new DOMException('선택이 취소되었습니다.', 'AbortError')
+    return picked.handle
+  }
   const picker = (window as unknown as {
     showDirectoryPicker: (o: object) => Promise<FileSystemDirectoryHandle>
   }).showDirectoryPicker

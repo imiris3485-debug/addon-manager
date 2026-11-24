@@ -4,16 +4,20 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useEnv } from '../lib/EnvContext'
 import { installAddon } from '../lib/installer'
+import { isDesktop } from '../lib/nativeFs'
 import type { ScanResponse, SearchItem } from '../lib/types'
 import { useFolder } from '../lib/useFolder'
 
 const PAGE_SIZE = 20
 
 export default function SearchPage() {
-  const { current } = useEnv()
-  const envId = current?.id ?? null
+  const { current, serverEnv, status } = useEnv()
+  // 설치는 데스크톱 앱에서만 한다. 웹 브라우저에서는 검색만 하므로 서버에 등록된 환경의 게임 버전을 빌려 쓴다.
+  const desktop = isDesktop()
+  const env = desktop ? current : serverEnv
+  const envId = env?.id ?? null
   const qc = useQueryClient()
-  const folder = useFolder(envId)
+  const folder = useFolder(desktop ? envId : null)
 
   const [input, setInput] = useState('')
   const [q, setQ] = useState('')
@@ -51,11 +55,14 @@ export default function SearchPage() {
     }
   }
 
-  if (!current) {
+  if (!env) {
+    if (status === 'loading' || desktop) return <p className="text-slate-400">불러오는 중...</p>
+    // 앱에서 폴더를 연결한 적이 없으면 게임 버전을 알 수 없어 검색할 수 없다
     return (
-      <div className="card text-center">
-        <p className="mb-3 text-slate-300">먼저 게임 환경을 만들어 주세요.</p>
-        <Link className="btn btn-primary" to="/environments">게임 환경 만들기</Link>
+      <div className="card space-y-3 text-center">
+        <p className="text-slate-300">먼저 데스크톱 앱에서 로그인해 와우 폴더를 연결해 주세요.</p>
+        <p className="text-sm text-slate-400">연결하면 게임 버전이 자동으로 정해져 웹에서도 검색할 수 있습니다.</p>
+        <Link className="btn btn-primary" to="/download">앱 다운로드</Link>
       </div>
     )
   }
@@ -64,17 +71,17 @@ export default function SearchPage() {
 
   return (
     <div className="space-y-4">
+      {!desktop && (
+        <p className="rounded-md border border-indigo-500/30 bg-indigo-500/10 p-3 text-sm text-indigo-200">
+          웹에서는 애드온 검색만 할 수 있습니다. 설치·업데이트는 <Link className="underline" to="/download">데스크톱 앱</Link>에서 하세요.
+        </p>
+      )}
       <form onSubmit={submit} className="flex gap-2">
-        <input className="input" placeholder={`애드온 검색 (게임 버전 ${current.gameVersion})`}
+        <input className="input" placeholder={`애드온 검색 (게임 버전 ${env.gameVersion})`}
                value={input} onChange={(e) => setInput(e.target.value)} />
         <button className="btn btn-primary">검색</button>
       </form>
 
-      {!folder.loading && !folder.handle && (
-        <p className="text-sm text-amber-300">
-          설치하려면 먼저 <Link className="underline" to="/environments">게임 환경</Link>에서 AddOns 폴더를 연결하세요.
-        </p>
-      )}
       {error && <p className="text-sm text-rose-400">{(error as Error).message}</p>}
       {isFetching && <p className="text-sm text-slate-400">검색 중...</p>}
 
@@ -101,7 +108,9 @@ export default function SearchPage() {
                   ? <span className="btn opacity-60">이 버전 파일 없음</span>
                   : !item.downloadable
                     ? <span className="btn opacity-60" title="작성자가 외부 배포를 막았습니다">직접 설치 필요</span>
-                    : <button className="btn btn-primary" disabled={!folder.handle} onClick={() => install(item)}>설치</button>}
+                    : desktop
+                      ? <button className="btn btn-primary" disabled={!folder.handle} onClick={() => install(item)}>설치</button>
+                      : <Link className="btn" to="/download">앱에서 설치</Link>}
             </div>
           </li>
         ))}

@@ -87,6 +87,38 @@ tasks.register('buildFrontend', Exec) {
     outputs.dir(file('frontend/dist'))
 }
 
+// ---------------------------------------------------------------
+// 데스크톱 앱(Electron) 설치 파일 빌드. IntelliJ 의 Gradle 창 → Tasks → desktop 에서 실행한다.
+//   ./gradlew desktopDist  → desktop/release/AddonManager-Setup-*.exe
+// bootJar(서버 jar)와는 별개라서 서버 빌드에는 영향이 없다. Windows 에서 실행해야 한다.
+// ---------------------------------------------------------------
+def desktopDir = file('desktop')
+
+tasks.register('desktopInstall', Exec) {
+    group = 'desktop'
+    description = '데스크톱 앱 의존성 설치(npm ci)'
+    workingDir desktopDir
+    commandLine npmCommand('ci')
+    inputs.files(file('desktop/package.json'), file('desktop/package-lock.json'))
+    outputs.dir(file('desktop/node_modules'))
+}
+
+tasks.register('desktopTest', Exec) {
+    group = 'desktop'
+    description = '데스크톱 앱 보안 로직 테스트(경로 검증·정션 차단·폴더 탐색)'
+    dependsOn 'desktopInstall'
+    workingDir desktopDir
+    commandLine npmCommand('test')
+}
+
+tasks.register('desktopDist', Exec) {
+    group = 'desktop'
+    description = '데스크톱 앱 윈도우 설치 파일 빌드(desktop/release/AddonManager-Setup-*.exe)'
+    dependsOn 'desktopTest'          // 보안 테스트가 통과해야 설치 파일을 만든다
+    workingDir desktopDir
+    commandLine npmCommand('run', 'dist')
+}
+
 // Dockerfile 이 고정된 이름으로 복사할 수 있게 한다
 tasks.named('bootJar') {
     archiveFileName = 'app.jar'

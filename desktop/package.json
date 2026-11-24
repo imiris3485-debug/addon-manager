@@ -1,0 +1,58 @@
+{
+  "name": "addon-manager-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Addon Manager 데스크톱 앱 - 웹 화면을 띄우고 PC 의 AddOns 폴더 작업만 담당한다",
+  "author": "Addon Manager",
+  "main": "dist/src/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsc && electron .",
+    "test": "tsc && node --test \"dist/test/**/*.test.js\"",
+    "dist": "tsc && electron-builder --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2"
+  },
+  "build": {
+    "appId": "com.shapinel.addonmanager",
+    "productName": "Addon Manager",
+    "artifactName": "AddonManager-Setup.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://addon-manager.shapinel.com/downloads"
+      }
+    ],
+    "files": [
+      "dist/src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
+}

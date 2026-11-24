@@ -1,6 +1,7 @@
 import { clearToken, getToken } from './auth'
 import type {
-  AccountStatus, AdminAccount, Environment, GameVersionGroup, InstallReport, ScanEntry, ScanResponse, SearchResponse,
+  AccountStatus, AdminAccount, Environment, GameVersionGroup, InstallReport, ReleaseInfo, ScanEntry, ScanResponse,
+  SearchResponse, UploadStart,
 } from './types'
 
 export class ApiError extends Error {
@@ -31,7 +32,9 @@ async function send(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getToken()
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  if (token) headers.set('Authorization', `Bearer ${token}`)
+  // 로그인·가입에는 토큰을 붙이지 않는다. 서버는 공개 경로에서도 Bearer 토큰이 있으면 검증하므로,
+  // 만료됐거나 서명키가 바뀐 옛 토큰이 남아 있으면 비밀번호가 맞아도 401 이 난다.
+  if (token && !path.startsWith('/auth/')) headers.set('Authorization', `Bearer ${token}`)
 
   const res = await fetch(`/api/v1${path}`, { ...init, headers })
   // 토큰이 만료/무효면 로그인 화면으로 보낸다. 로그인·가입 요청 자체의 401 은 그대로 오류로 보여준다.
@@ -63,6 +66,8 @@ export const api = {
   environments: () => json<Environment[]>('/environments'),
   createEnvironment: (name: string, gameVersion: string) =>
     json<Environment>('/environments', body({ name, gameVersion })),
+  updateEnvironment: (id: number, name: string, gameVersion: string) =>
+    empty(`/environments/${id}`, { method: 'PUT', body: JSON.stringify({ name, gameVersion }) }),
   deleteEnvironment: (id: number) => empty(`/environments/${id}`, { method: 'DELETE' }),
 
   // 애드온
@@ -79,6 +84,18 @@ export const api = {
     const res = await send(`/addons/${projectId}/files/${fileId}/download`)
     return new Uint8Array(await res.arrayBuffer())
   },
+
+  // 관리자: 데스크톱 앱 배포(설치 파일은 프록시 크기 제한을 피하려고 조각으로 올린다)
+  adminRelease: () => json<ReleaseInfo>('/admin/app-release'),
+  adminReleaseStart: () => json<UploadStart>('/admin/app-release/uploads', { method: 'POST' }),
+  adminReleaseChunk: (uploadId: string, index: number, chunk: Blob) =>
+    empty(`/admin/app-release/uploads/${uploadId}/chunks/${index}`, {
+      method: 'PUT', body: chunk, headers: { 'Content-Type': 'application/octet-stream' },
+    }),
+  adminReleaseComplete: (uploadId: string, latestYml: string) =>
+    json<ReleaseInfo>(`/admin/app-release/uploads/${uploadId}/complete`, body({ latestYml })),
+  adminReleaseAbort: (uploadId: string) =>
+    empty(`/admin/app-release/uploads/${uploadId}`, { method: 'DELETE' }),
 
   // 관리자
   adminAccounts: (status?: AccountStatus) =>

@@ -24,6 +24,14 @@
 - File System Access API 는 **보안 컨텍스트(https 또는 localhost)** 에서만 동작한다. 운영 배포는 반드시 HTTPS 로 서빙한다.
 - 토큰으로 읽은 역할(관리자 여부)은 화면 표시용일 뿐이며, 권한 검사는 서버 `@PreAuthorize` 가 한다.
 
+## 데스크톱 앱 (desktop/)
+- Chrome 은 `Program Files` 같은 시스템 폴더를 선택하지 못하게 막는다. 이를 피하려고 웹 화면을 띄우는 Electron 껍데기를 두고, **PC 폴더 작업만** 앱(main)이 맡는다. 서버는 여전히 로컬 폴더를 건드리지 않는다.
+- 프론트는 `src/lib/nativeFs.ts` 어댑터로 앱의 `window.addonFs` 를 폴더 핸들처럼 다룬다. 일반 브라우저에서는 기존 File System Access 방식 그대로다.
+- **앱은 화면(웹)을 믿지 않는다.** 요청 출처 검사, 연결 폴더는 `Interface\AddOns` 형태만, 경로는 이름 조각 배열로 받아 `..`·드라이브·링크 거부. 이 검사를 약화시키는 변경은 하지 않는다(`desktop/test` 로 검증).
+- 빌드: `cd desktop && npm run dist`(또는 Gradle `desktopDist`) → `desktop/release/AddonManager-Setup.exe` + `latest.yml`. 자세한 내용은 `desktop/README.md`.
+- 배포: 관리자가 웹 "앱 배포" 메뉴에서 위 두 파일을 올린다(`/api/v1/admin/app-release`, ADMIN 전용, 8MB 조각 업로드). 서버가 SHA-512·크기를 대조해 `DOWNLOADS_DIR` 에 게시하고 `/downloads/**` 로 서빙한다. 앱은 `latest.yml` 로 자동 업데이트한다. 새 빌드 전에 `desktop/package.json` 의 `version` 을 올린다.
+- 이 배포 통로는 모든 사용자 PC 에 코드를 보낼 수 있으므로 ADMIN 권한 보호(`AdminReleaseSecurityTest`)와 업로드 검증을 약화시키지 않는다.
+
 ## 코딩 규칙
 - 생성자 주입(@RequiredArgsConstructor + private final)만 사용.
 - 서비스: 클래스 @Transactional(rollbackFor = Exception.class), 조회 메서드는 readOnly = true.

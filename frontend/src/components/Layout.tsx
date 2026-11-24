@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { EnvProvider, useEnv } from '../lib/EnvContext'
-import { isFolderAccessSupported } from '../lib/handles'
+import { isDesktop } from '../lib/nativeFs'
 
 const navCls = ({ isActive }: { isActive: boolean }) =>
   `rounded-md px-3 py-1.5 text-sm font-medium transition ${
@@ -10,30 +10,30 @@ const navCls = ({ isActive }: { isActive: boolean }) =>
 
 function Header() {
   const { info, isAdmin, logout } = useAuth()
-  const { environments, current, setCurrentId } = useEnv()
+  const { status, current, changeFolder } = useEnv()
+  const desktop = isDesktop()
+  // 앱에서는 와우 폴더 연결이 끝나기 전에 애드온 메뉴를 보여 주지 않는다
+  const ready = status === 'ready'
+
+  const onChangeFolder = () => changeFolder().catch((e) => alert((e as Error).message))
 
   return (
     <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
         <span className="mr-2 text-lg font-bold text-indigo-400">Addon Manager</span>
         <nav className="flex flex-wrap gap-1">
-          <NavLink to="/installed" className={navCls}>설치된 애드온</NavLink>
-          <NavLink to="/search" className={navCls}>검색</NavLink>
-          <NavLink to="/environments" className={navCls}>게임 환경</NavLink>
-          {isAdmin && <NavLink to="/admin" className={navCls}>계정 승인</NavLink>}
+          {desktop && ready && <NavLink to="/installed" className={navCls}>설치된 애드온</NavLink>}
+          {(!desktop || ready) && <NavLink to="/search" className={navCls}>검색</NavLink>}
+          {!desktop && <NavLink to="/download" className={navCls}>앱 다운로드</NavLink>}
+          {isAdmin && <NavLink to="/admin" end className={navCls}>계정 승인</NavLink>}
+          {isAdmin && <NavLink to="/admin/release" className={navCls}>앱 배포</NavLink>}
         </nav>
         <div className="ml-auto flex items-center gap-3">
-          {environments.length > 0 && (
-            <select
-              className="input !w-auto"
-              value={current?.id ?? ''}
-              onChange={(e) => setCurrentId(Number(e.target.value))}
-              aria-label="게임 환경 선택"
-            >
-              {environments.map((e) => (
-                <option key={e.id} value={e.id}>{e.name} ({e.gameVersion})</option>
-              ))}
-            </select>
+          {desktop && current && (
+            <>
+              <span className="text-sm text-slate-400">게임 버전 {current.gameVersion}</span>
+              <button className="btn" onClick={onChangeFolder} title="다른 와우 설치 폴더로 바꿉니다">폴더 변경</button>
+            </>
           )}
           <span className="text-sm text-slate-400">{info?.loginId}</span>
           <button className="btn" onClick={logout}>로그아웃</button>
@@ -49,12 +49,6 @@ export default function Layout() {
       <div className="min-h-full">
         <Header />
         <main className="mx-auto max-w-6xl px-4 py-6">
-          {!isFolderAccessSupported() && (
-            <div className="mb-4 rounded-md border border-amber-600/40 bg-amber-500/10 p-3 text-sm text-amber-200">
-              이 브라우저는 로컬 폴더 접근(File System Access API)을 지원하지 않습니다.
-              애드온 설치·업데이트는 Chrome 또는 Edge 에서 사용해 주세요.
-            </div>
-          )}
           <Outlet />
         </main>
       </div>

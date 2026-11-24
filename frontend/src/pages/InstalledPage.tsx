@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { StatusBadge } from '../components/StatusBadge'
 import { useEnv } from '../lib/EnvContext'
@@ -10,7 +9,7 @@ import type { InstalledAddon, ScanResponse } from '../lib/types'
 import { useFolder } from '../lib/useFolder'
 
 export default function InstalledPage() {
-  const { current, loading: envLoading } = useEnv()
+  const { current } = useEnv()
   const envId = current?.id ?? null
   const qc = useQueryClient()
   const folder = useFolder(envId)
@@ -119,31 +118,8 @@ export default function InstalledPage() {
     }
   }
 
-  if (envLoading || folder.loading) return <p className="text-slate-400">불러오는 중...</p>
-
-  if (!current) {
-    return (
-      <div className="card text-center">
-        <p className="mb-3 text-slate-300">먼저 게임 환경을 만들어 주세요.</p>
-        <Link className="btn btn-primary" to="/environments">게임 환경 만들기</Link>
-      </div>
-    )
-  }
-
-  if (!folder.handle) {
-    return (
-      <div className="card space-y-3 text-center">
-        <p className="text-slate-300">
-          <b>{current.name}</b> 환경에 연결된 AddOns 폴더가 없습니다.
-        </p>
-        <p className="text-sm text-slate-400">예: …\World of Warcraft\Interface\AddOns</p>
-        <button className="btn btn-primary" onClick={() => folder.pick().catch((e) => setError(e.message))}>
-          AddOns 폴더 선택
-        </button>
-        {error && <p className="text-sm text-rose-400">{error}</p>}
-      </div>
-    )
-  }
+  // 환경과 폴더 연결은 FolderGate 가 보장한다. 핸들을 읽어 오는 짧은 순간만 대기 표시를 한다.
+  if (!current || folder.loading || !folder.handle) return <p className="text-slate-400">불러오는 중...</p>
 
   const updatable = result?.addons.filter((a) => a.status === 'UPDATE_AVAILABLE' && a.downloadable).length ?? 0
   const busy = status !== null

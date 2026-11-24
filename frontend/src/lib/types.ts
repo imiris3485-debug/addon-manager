@@ -74,3 +74,19 @@ export interface InstallReport {
   tocVersion: string | null
   folders: string[]
 }
+
+/** 현재 게시된 데스크톱 앱 */
+export interface ReleaseInfo {
+  published: boolean
+  version: string | null
+  size: number
+  releaseDate: string | null
+}
+
+export interface UploadStart {
+  uploadId: string
+  /** 한 번에 보낼 수 있는 최대 조각 크기(바이트) */
+  chunkSize: number
+  /** 올릴 수 있는 설치 파일의 최대 크기(바이트) */
+  maxBytes: number
+}
