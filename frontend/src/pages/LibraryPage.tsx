@@ -288,9 +288,10 @@ export default function LibraryPage() {
                     )}
                   </div>
                   <div className="flex gap-2">
-                    {item && (
-                      <button className={`btn ${state === 'UP_TO_DATE' ? '' : 'btn-primary'}`} disabled={busy !== null || !folder.handle} onClick={() => install(item)}>
-                        {state === 'UPDATE_AVAILABLE' ? '업데이트' : state === 'UP_TO_DATE' ? '다시 설치' : '자료실 것으로 설치'}
+                    {/* 최신이면 버튼을 두지 않는다(복구가 필요하면 삭제 후 자료실에서 설치) */}
+                    {item && state !== 'UP_TO_DATE' && (
+                      <button className="btn btn-primary" disabled={busy !== null || !folder.handle} onClick={() => install(item)}>
+                        {state === 'UPDATE_AVAILABLE' ? '업데이트' : '자료실 것으로 설치'}
                       </button>
                     )}
                     <button className="btn btn-danger" disabled={busy !== null || !folder.handle}
