@@ -11,6 +11,7 @@ import { scanFolders } from '../lib/scanner'
 import type { LibraryAddon, LocalFolder } from '../lib/types'
 import { useFolder } from '../lib/useFolder'
 
+type View = 'LIBRARY' | 'INSTALLED'
 type Filter = 'ALL' | 'NOT_INSTALLED' | 'INSTALLED' | 'UPDATE_AVAILABLE'
 
 const FILTER_LABEL: Record<Filter, string> = {
@@ -39,6 +40,7 @@ export default function LibraryPage() {
     staleTime: 0,
   })
 
+  const [view, setView] = useState<View>('LIBRARY')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('ALL')
   const [busy, setBusy] = useState<string | null>(null)          // 작업 중인 항목 이름 또는 '*'
@@ -65,7 +67,20 @@ export default function LibraryPage() {
   }, [library, localByName, query, filter, desktop, local])
 
   const outdated = rows.filter((r) => r.state === 'UPDATE_AVAILABLE').map((r) => r.item)
-  const unmanaged = useMemo(() => (local ?? []).filter((l) => !libraryNames.has(l.name.toLowerCase())), [local, libraryNames])
+  const libraryByName = useMemo(() => new Map((library ?? []).map((a) => [a.name.toLowerCase(), a])), [library])
+  // 내 PC 의 AddOns 폴더에 있는 모든 애드온(자료실에 있든 없든). 개별 업데이트·삭제는 여기서 한다.
+  const installedRows = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return (local ?? [])
+      .filter((l) => !q || l.name.toLowerCase().includes(q))
+      .map((l) => {
+        const item = libraryByName.get(l.name.toLowerCase())
+        return { folder: l, item, state: item ? libraryState(item, l, hashes) : null }
+      })
+      .sort((a, b) => a.folder.name.localeCompare(b.folder.name))
+    // hashes 는 렌더마다 localStorage 에서 읽는 값이라 local 이 바뀔 때 함께 다시 계산한다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [local, libraryByName, query])
 
   const install = async (item: LibraryAddon) => {
     if (envId == null || !library) return
@@ -174,6 +189,13 @@ export default function LibraryPage() {
         </div>
       </div>
 
+      {desktop && (
+        <div className="flex gap-1">
+          <button className={`btn ${view === 'LIBRARY' ? '!bg-slate-700' : ''}`} onClick={() => setView('LIBRARY')}>자료실 {library ? library.length : ''}</button>
+          <button className={`btn ${view === 'INSTALLED' ? '!bg-slate-700' : ''}`} onClick={() => setView('INSTALLED')}>내 설치 목록 {local ? local.length : ''}</button>
+        </div>
+      )}
+
       {!desktop && (
         <p className="rounded-md border border-indigo-500/30 bg-indigo-500/10 p-3 text-sm text-indigo-200">
           웹에서는 자료실 목록만 볼 수 있습니다. 설치·업데이트는 <Link className="underline" to="/download">데스크톱 앱</Link>에서 하세요.
@@ -182,7 +204,7 @@ export default function LibraryPage() {
 
       <div className="flex flex-wrap gap-2">
         <input className="input min-w-48 flex-1" placeholder="애드온 이름 검색" value={query} onChange={(e) => setQuery(e.target.value)} />
-        {desktop && (
+        {desktop && view === 'LIBRARY' && (
           <select className="input !w-auto" aria-label="상태" value={filter} onChange={(e) => setFilter(e.target.value as Filter)}>
             {(Object.keys(FILTER_LABEL) as Filter[]).map((f) => <option key={f} value={f}>{FILTER_LABEL[f]}</option>)}
           </select>
@@ -192,10 +214,10 @@ export default function LibraryPage() {
       {notice && <p className="text-sm text-rose-400">{notice}</p>}
       {isLoading && <p className="text-slate-400">불러오는 중...</p>}
       {error && <p className="text-sm text-rose-400">{(error as Error).message}</p>}
-      {library && library.length === 0 && <div className="card text-slate-400">아직 자료실에 올라온 애드온이 없습니다.</div>}
-      {library && library.length > 0 && rows.length === 0 && <p className="text-slate-400">조건에 맞는 애드온이 없습니다.</p>}
+      {view === 'LIBRARY' && library && library.length === 0 && <div className="card text-slate-400">아직 자료실에 올라온 애드온이 없습니다.</div>}
+      {view === 'LIBRARY' && library && library.length > 0 && rows.length === 0 && <p className="text-slate-400">조건에 맞는 애드온이 없습니다.</p>}
 
-      <ul className="space-y-2">
+      {view === 'LIBRARY' && <ul className="space-y-2">
         {rows.map(({ item, state }) => {
           const missing = desktop ? missingFor(item) : []
           return (
@@ -233,24 +255,45 @@ export default function LibraryPage() {
             </li>
           )
         })}
-      </ul>
+      </ul>}
 
-      {desktop && unmanaged.length > 0 && (
-        <details className="card">
-          <summary className="cursor-pointer text-sm text-slate-300">자료실에 없는 폴더 {unmanaged.length}개</summary>
-          <p className="mt-2 text-xs text-slate-500">
-            내 AddOns 폴더에 있지만 자료실 항목이 아닌 애드온입니다. 이 앱이 업데이트하지 않습니다.
-            다른 애드온이 쓰는 폴더일 수 있으니 무엇인지 확인한 뒤 삭제하세요.
+      {desktop && view === 'INSTALLED' && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-500">
+            이 PC 의 AddOns 폴더에서 읽은 애드온 {local ? `${local.length}개` : '(읽는 중...)'}. 자료실에 있는 것은 업데이트할 수 있고, 모든 폴더를 삭제할 수 있습니다.
           </p>
-          <ul className="mt-2 space-y-1">
-            {unmanaged.map((f) => (
-              <li key={f.name} className="flex items-center gap-2 text-xs text-slate-300">
-                <span className="min-w-0 flex-1 truncate">{f.name}{f.version && <span className="text-slate-500"> v{f.version}</span>}</span>
-                <button className="btn btn-danger !px-2 !py-0.5" disabled={busy !== null} onClick={() => removeUnmanaged(f.name)}>삭제</button>
+          {local && local.length === 0 && <div className="card text-slate-400">이 AddOns 폴더에서 애드온을 찾지 못했습니다.</div>}
+          <ul className="space-y-2">
+            {installedRows.map(({ folder: f, item, state }) => (
+              <li key={f.name} className="card space-y-1">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{f.name}</span>
+                      {f.version && <span className="text-xs text-slate-400">v{f.version}</span>}
+                      {state && state !== 'NOT_INSTALLED'
+                        ? <span className={`rounded px-1.5 py-0.5 text-xs ${STATE_BADGE[state].cls}`}>{STATE_BADGE[state].label}</span>
+                        : <span className="rounded bg-slate-500/20 px-1.5 py-0.5 text-xs text-slate-300">자료실에 없음</span>}
+                    </div>
+                    {item && state === 'UPDATE_AVAILABLE' && (
+                      <div className="text-xs text-amber-300">자료실 {item.version ? `v${item.version}` : '최신 내용'} 으로 업데이트할 수 있습니다.</div>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    {item && state !== 'UP_TO_DATE' && (
+                      <button className="btn btn-primary" disabled={busy !== null || !folder.handle} onClick={() => install(item)}>
+                        {state === 'UPDATE_AVAILABLE' ? '업데이트' : '자료실 것으로 설치'}
+                      </button>
+                    )}
+                    <button className="btn btn-danger" disabled={busy !== null || !folder.handle}
+                      onClick={() => (item ? removeInstalled(item) : removeUnmanaged(f.name))}>삭제</button>
+                  </div>
+                </div>
+                {message[item?.name ?? f.name] && <p className="whitespace-pre-line text-xs text-amber-300">{message[item?.name ?? f.name]}</p>}
               </li>
             ))}
           </ul>
-        </details>
+        </div>
       )}
     </div>
   )
