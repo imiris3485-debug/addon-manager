@@ -6,7 +6,7 @@ import { FsOps, toFsError } from './fsOps'
 import { detectAddonsPaths, isForeverAddonsPath, resolveAddonsPaths } from './locator'
 import { FsError } from './pathGuard'
 import { LIBRARY_KEY, RootStore } from './rootStore'
-import { setupAutoUpdate } from './updater'
+import { checkNow, installNow, setupAutoUpdate } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 let store: RootStore
@@ -107,6 +107,10 @@ function registerIpc(): void {
   handle('fs:write', (key, rel, data) => ops.write(key, rel, data))
   handle('fs:mkdir', (key, rel) => ops.mkdir(key, rel))
   handle('fs:remove', (key, rel, recursive) => ops.remove(key, rel, recursive))
+  // 앱 버전·업데이트. 화면의 요청이어도 출처 검사(handle)를 거치고, 업데이트 주소는 앱에 고정돼 있어 화면이 바꿀 수 없다.
+  handle('app:version', () => app.getVersion())
+  handle('app:checkUpdate', () => checkNow())
+  handle('app:installUpdate', () => installNow())
 }
 
 function createWindow(): void {

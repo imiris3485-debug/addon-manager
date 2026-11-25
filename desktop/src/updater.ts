@@ -11,6 +11,35 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
  * ⚠️ 코드 서명이 없으므로 서버가 받쳐 주는 무결성은 HTTPS 와 latest.yml 의 SHA-512 뿐이다.
  *    그래서 게시 권한(관리자)을 보호하는 것이 업데이트 보안의 핵심이다.
  */
+export interface UpdateStatus {
+  /** dev: 설치본이 아님 / latest: 최신 / downloaded: 새 버전을 받았고 재시작하면 적용 / error: 확인 실패 */
+  state: 'dev' | 'latest' | 'downloaded' | 'error'
+  current: string
+  latest?: string
+  message?: string
+}
+
+/** 지금 바로 새 버전이 있는지 확인하고, 있으면 받아 둔다(사용자가 버튼을 눌렀을 때). */
+export async function checkNow(): Promise<UpdateStatus> {
+  const current = app.getVersion()
+  if (!app.isPackaged) return { state: 'dev', current }
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    const latest = result?.updateInfo.version
+    if (!result || !result.isUpdateAvailable) return { state: 'latest', current, latest }
+    if (result.downloadPromise) await result.downloadPromise
+    return { state: 'downloaded', current, latest }
+  } catch (e) {
+    // 확인 실패의 이유(서버에 게시된 앱이 없음, 네트워크 등)를 사용자가 볼 수 있게 돌려준다
+    return { state: 'error', current, message: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** 받아 둔 새 버전을 적용하고 다시 시작한다. */
+export function installNow(): void {
+  autoUpdater.quitAndInstall(true, true)
+}
+
 export function setupAutoUpdate(getWindow: () => BrowserWindow | null): void {
   if (!app.isPackaged) return    // 개발 중에는 설치본이 아니라서 확인하지 않는다
 

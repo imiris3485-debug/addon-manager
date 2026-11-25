@@ -3,12 +3,51 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { EnvProvider, useEnv } from '../lib/EnvContext'
-import { isDesktop } from '../lib/nativeFs'
+import { useEffect, useState } from 'react'
+import { checkAppUpdate, getAppVersion, installAppUpdate, isDesktop } from '../lib/nativeFs'
 
 const navCls = ({ isActive }: { isActive: boolean }) =>
   `rounded-md px-3 py-1.5 text-sm font-medium transition ${
     isActive ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
   }`
+
+/** 앱 버전과 업데이트 확인(앱에서만). 옛 앱은 버전 조회가 없어서 그 사실을 알려 준다. */
+function AppVersion() {
+  const [version, setVersion] = useState<string | null | undefined>(undefined)   // undefined: 확인 중
+  const [text, setText] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    getAppVersion().then(setVersion).catch(() => setVersion(null))
+  }, [])
+
+  const check = async () => {
+    setBusy(true)
+    setText(null)
+    try {
+      const r = await checkAppUpdate()
+      if (!r) setText('이 앱은 업데이트 확인 기능이 없는 옛 버전입니다. 새 설치 파일로 다시 설치해 주세요.')
+      else if (r.state === 'dev') setText('개발 실행 중이라 확인하지 않습니다.')
+      else if (r.state === 'error') setText(`확인하지 못했습니다: ${r.message ?? '알 수 없는 오류'}`)
+      else if (r.state === 'latest') setText(`최신 버전입니다.${r.latest ? ` (서버 ${r.latest})` : ''}`)
+      else { setText(`새 버전 ${r.latest}을(를) 받았습니다.`); setReady(true) }
+    } catch (e) {
+      setText((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-sm text-slate-400">
+      <span title="설치된 데스크톱 앱의 버전">{version === undefined ? '앱 확인 중...' : version ? `앱 v${version}` : '앱 버전 확인 불가(옛 버전)'}</span>
+      <button className="btn !px-2 !py-0.5 text-xs" disabled={busy} onClick={check}>{busy ? '확인 중...' : '업데이트 확인'}</button>
+      {ready && <button className="btn btn-primary !px-2 !py-0.5 text-xs" onClick={() => installAppUpdate()}>재시작해서 적용</button>}
+      {text && <span className="text-xs text-amber-300">{text}</span>}
+    </div>
+  )
+}
 
 function Header() {
   const { info, isAdmin, logout } = useAuth()
@@ -45,6 +84,7 @@ function Header() {
               <button className="btn" onClick={onChangeFolder} title="다른 와우 설치 폴더로 바꿉니다">폴더 변경</button>
             </>
           )}
+          {desktop && <AppVersion />}
           <span className="text-sm text-slate-400">{info?.loginId}</span>
           <button className="btn" onClick={logout}>로그아웃</button>
         </div>

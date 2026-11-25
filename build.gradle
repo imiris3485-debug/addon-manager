@@ -89,7 +89,7 @@ tasks.register('buildFrontend', Exec) {
 
 // ---------------------------------------------------------------
 // 데스크톱 앱(Electron) 설치 파일 빌드. IntelliJ 의 Gradle 창 → Tasks → desktop 에서 실행한다.
-//   ./gradlew desktopDist  → desktop/release/AddonManager-Setup-*.exe
+//   ./gradlew desktopDist  → desktop/release/AddonManager-Setup.exe + latest.yml
 // bootJar(서버 jar)와는 별개라서 서버 빌드에는 영향이 없다. Windows 에서 실행해야 한다.
 // ---------------------------------------------------------------
 def desktopDir = file('desktop')
@@ -113,7 +113,7 @@ tasks.register('desktopTest', Exec) {
 
 tasks.register('desktopDist', Exec) {
     group = 'desktop'
-    description = '데스크톱 앱 윈도우 설치 파일 빌드(desktop/release/AddonManager-Setup-*.exe)'
+    description = '데스크톱 앱 윈도우 설치 파일 빌드(desktop/release/AddonManager-Setup.exe + latest.yml)'
     dependsOn 'desktopTest'          // 보안 테스트가 통과해야 설치 파일을 만든다
     workingDir desktopDir
     commandLine npmCommand('run', 'dist')

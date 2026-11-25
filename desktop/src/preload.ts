@@ -18,4 +18,7 @@ contextBridge.exposeInMainWorld('addonFs', {
   write: (key: string, rel: string[], data: Uint8Array) => call('fs:write', key, rel, data),
   mkdir: (key: string, rel: string[]) => call('fs:mkdir', key, rel),
   remove: (key: string, rel: string[], recursive: boolean) => call('fs:remove', key, rel, recursive),
+  appVersion: () => call('app:version'),
+  checkUpdate: () => call('app:checkUpdate'),
+  installUpdate: () => call('app:installUpdate'),
 })

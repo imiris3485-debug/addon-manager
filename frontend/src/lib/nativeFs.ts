@@ -28,6 +28,17 @@ interface AddonFsBridge {
   write(key: string, rel: string[], data: Uint8Array): Promise<Result<void>>
   mkdir(key: string, rel: string[]): Promise<Result<void>>
   remove(key: string, rel: string[], recursive: boolean): Promise<Result<void>>
+  /** 앱 버전·업데이트(이 기능이 생기기 전의 옛 앱에는 없다) */
+  appVersion?(): Promise<Result<string>>
+  checkUpdate?(): Promise<Result<AppUpdateStatus>>
+  installUpdate?(): Promise<Result<void>>
+}
+
+export interface AppUpdateStatus {
+  state: 'dev' | 'latest' | 'downloaded' | 'error'
+  current: string
+  latest?: string
+  message?: string
 }
 
 declare global {
@@ -158,14 +169,47 @@ export async function pickNative(): Promise<{ handle: FileSystemDirectoryHandle;
   return picked ? { handle: asDirectoryHandle(new NativeDirHandle(picked.key)), label: picked.label } : null
 }
 
+/** 앱 버전. 버전 조회가 없는 옛 앱이면 null(그 자체가 "앱을 업데이트해야 한다"는 뜻이다). */
+export async function getAppVersion(): Promise<string | null> {
+  const b = bridge()
+  if (typeof b.appVersion !== 'function') return null
+  return unwrap(await b.appVersion())
+}
+
+/** 새 버전을 확인하고 있으면 받아 둔다. 옛 앱이면 null. */
+export async function checkAppUpdate(): Promise<AppUpdateStatus | null> {
+  const b = bridge()
+  if (typeof b.checkUpdate !== 'function') return null
+  return unwrap(await b.checkUpdate())
+}
+
+/** 받아 둔 새 버전을 적용하며 앱을 다시 시작한다. */
+export async function installAppUpdate(): Promise<void> {
+  const b = bridge()
+  if (typeof b.installUpdate === 'function') unwrap(await b.installUpdate())
+}
+
+/**
+ * 웹은 서버에서 바로 새로 배포되지만 앱은 PC 에 설치돼 있어서, 옛 앱에는 자료실 폴더 기능이 없다.
+ * 그때 `pickLibrary is not a function` 같은 알 수 없는 오류 대신 해야 할 일을 알려 준다.
+ */
+function requireNewApp() {
+  const b = bridge() as Partial<AddonFsBridge>
+  if (typeof b.pickLibrary !== 'function' || typeof b.libraryInfo !== 'function') {
+    throw new Error('설치된 데스크톱 앱이 옛 버전이라 이 기능을 쓸 수 없습니다. 앱을 최신 버전으로 업데이트(재설치)해 주세요.')
+  }
+}
+
 /** 자료실 원본 폴더를 고른다(관리자). 취소하면 null. 읽기 전용 핸들이라 쓰기·삭제는 앱이 거부한다. */
 export async function pickLibraryFolder(): Promise<{ handle: FileSystemDirectoryHandle; label: string } | null> {
+  requireNewApp()
   const picked = unwrap(await bridge().pickLibrary())
   return picked ? { handle: libraryHandle(picked), label: picked.label } : null
 }
 
 /** 이미 정해 둔 자료실 원본 폴더. 없거나 사라졌으면 null. */
 export async function getLibraryFolder(): Promise<{ handle: FileSystemDirectoryHandle; label: string } | null> {
+  requireNewApp()
   const info = unwrap(await bridge().libraryInfo())
   return info ? { handle: libraryHandle(info), label: info.label } : null
 }
