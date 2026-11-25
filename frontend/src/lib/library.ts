@@ -156,7 +156,7 @@ export async function installFromLibrary(
     onProgress(addon === item ? `설치 중: ${addon.name}` : `필요한 애드온 설치 중: ${addon.name}`)
     // 파일 목록을 받아 검사하고, 내 폴더와 같은 파일은 그대로 둔 채 바뀐 파일만 내려받아 해시를 확인하며 쓴다
     const manifest = await api.libraryManifest(addon.id)
-    const result = await installAddonFiles(root, addon.name, manifest, addon.contentHash, (path) => api.libraryFile(addon.id, path), onProgress)
+    const result = await installAddonFiles(root, addon.name, manifest, addon.contentHash, (paths) => api.libraryBundle(addon.id, paths), onProgress)
     rememberInstalled(envId, addon.name, result.hash)
     events.push({ addonName: addon.name, action: 'INSTALLED', contentHash: result.hash })   // 처음인지 업데이트인지는 서버가 기록으로 가린다
   }

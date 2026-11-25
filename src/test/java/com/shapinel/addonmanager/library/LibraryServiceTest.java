@@ -14,8 +14,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.core.io.Resource;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -33,7 +35,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * 자료실(내려받기·지우기) 정책
- * - 받는 쪽에는 "파일 목록(경로·크기·SHA-256)"과 목록에 있는 파일만 내려준다. 목록에 없는 경로나 폴더 밖으로 나가는 경로는 거부한다.
+ * - 받는 쪽에는 "파일 목록(경로·크기·SHA-256)"과, 목록에 있는 파일만 한 스트림(묶음)에 담아 내려준다(파일마다 요청하면 수천 개짜리 애드온은 너무 느리다).
+ *   목록에 없는 경로나 폴더 밖으로 나가는 경로가 하나라도 있으면 거부한다.
  * - 경로가 섞인 ID 로는 받거나 지울 수 없고, 저장 폴더가 설정되지 않으면 기능이 꺼진다.
  * - 지우면 DB 와 서버의 파일(옛 zip 포함)을 모두 지운다.
  * - 같이 설치할 애드온 지정은 폴더 이름만 받는다(경로 문자 거부).
@@ -64,7 +67,7 @@ class LibraryServiceTest {
         Files.createDirectories(item.resolve("data/libs"));
         Files.writeString(item.resolve("data/Details.toc"), "## Version: 1\n", StandardCharsets.UTF_8);
         Files.writeString(item.resolve("data/libs/a.lua"), "x", StandardCharsets.UTF_8);
-        LibraryLayout.writeManifest(item, List.of(new FileSpec("Details.toc", 13, "a".repeat(64)), new FileSpec("libs/a.lua", 1, "b".repeat(64))));
+        LibraryLayout.writeManifest(item, List.of(new FileSpec("Details.toc", 14, "a".repeat(64)), new FileSpec("libs/a.lua", 1, "b".repeat(64))));
         // 폴더 밖에 있는 비밀 파일(목록에도 없다)
         Files.writeString(dir.resolve("secret.txt"), "비밀", StandardCharsets.UTF_8);
     }
@@ -78,26 +81,53 @@ class LibraryServiceTest {
         assertThat(files.get(1).getSha256()).isEqualTo("b".repeat(64));
     }
 
-    @Test
-    void 목록에_있는_파일만_내려준다() throws IOException {
-        Resource r = service.file(ID, "libs/a.lua");
-
-        assertThat(r.getContentAsString(StandardCharsets.UTF_8)).isEqualTo("x");
+    /** 묶음을 만들어 [경로 길이 2][경로][크기 8][내용] 형식을 읽어 경로 → 내용으로 돌려준다. */
+    private java.util.Map<String, String> bundle(String... paths) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        LibraryService.writeBundle(service.prepareBundle(ID, List.of(paths)), out);
+        DataInputStream in = new DataInputStream(new ByteArrayInputStream(out.toByteArray()));
+        java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
+        while (in.available() > 0) {
+            byte[] path = new byte[in.readUnsignedShort()];
+            in.readFully(path);
+            byte[] data = new byte[(int) in.readLong()];
+            in.readFully(data);
+            result.put(new String(path, StandardCharsets.UTF_8), new String(data, StandardCharsets.UTF_8));
+        }
+        return result;
     }
 
     @Test
-    void 목록에_없거나_폴더_밖으로_나가는_경로는_거부한다() {
-        assertThatThrownBy(() -> service.file(ID, "libs/other.lua")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.file(ID, "../../secret.txt")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.file(ID, "/etc/passwd")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.file(ID, "C:/Windows/win.ini")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.file(ID, "..\\secret.txt")).isInstanceOf(BusinessException.class);
+    void 목록에_있는_파일만_한_묶음으로_내려준다() throws IOException {
+        // 같은 경로를 두 번 달라고 해도 한 번만 담는다
+        assertThat(bundle("libs/a.lua", "Details.toc", "libs/a.lua")).containsExactly(
+                java.util.Map.entry("libs/a.lua", "x"), java.util.Map.entry("Details.toc", "## Version: 1\n"));
+    }
+
+    @Test
+    void 목록에_없거나_폴더_밖으로_나가는_경로가_하나라도_있으면_거부한다() {
+        assertThatThrownBy(() -> bundle("libs/a.lua", "libs/other.lua")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> bundle("../../secret.txt")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> bundle("/etc/passwd")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> bundle("C:/Windows/win.ini")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> bundle("..\\secret.txt")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.prepareBundle(ID, List.of())).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.prepareBundle(ID, java.util.Collections.nCopies(LibraryService.MAX_BUNDLE_PATHS + 1, "Details.toc")))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void 디스크의_파일이_목록의_크기보다_짧으면_묶음을_끊는다() throws IOException {
+        Path item = dir.resolve(ID);
+        LibraryLayout.writeManifest(item, List.of(new FileSpec("Details.toc", 14, "a".repeat(64)), new FileSpec("libs/a.lua", 99, "b".repeat(64))));
+
+        assertThatThrownBy(() -> bundle("libs/a.lua")).isInstanceOf(IOException.class).hasMessageContaining("목록보다 짧습니다");
     }
 
     @Test
     void 목록에_없는_항목이나_경로_문자가_섞인_ID_는_거부한다() {
         assertThatThrownBy(() -> service.manifest("../library")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.file("not-a-uuid", "a")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.prepareBundle("not-a-uuid", List.of("a"))).isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> service.manifest("ffffffff-2222-3333-4444-55555555abcd"))
                 .isInstanceOf(BusinessException.class).extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND);
     }

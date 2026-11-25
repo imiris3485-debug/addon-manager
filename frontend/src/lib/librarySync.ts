@@ -8,8 +8,12 @@ import type { LibraryAddon } from './types'
 // 폴더 내용의 해시를 계산해 새로 생겼거나 바뀐 애드온만 올리고, 올릴 때도 서버에 이미 있는 같은 파일은 건너뛰고 바뀐 파일만 올린다.
 // 파일 하나씩 조각으로 이어 올리므로 애드온이 아무리 커도(파일 하나당 250MB 이하) 올릴 수 있다.
 
-/** 조각 하나의 크기. 프록시(Cloudflare)의 요청 크기 제한(100MB)보다 훨씬 작게 잡아 느린 연결에서도 끊기지 않게 한다. */
+/** 큰 파일의 조각 하나의 크기. 프록시(Cloudflare)의 요청 크기 제한(100MB)보다 훨씬 작게 잡아 느린 연결에서도 끊기지 않게 한다. */
 const CHUNK_BYTES = 8 * 1024 * 1024
+/** 이보다 작은 파일은 묶음으로 올린다(파일마다 요청하면 수천 개짜리 애드온은 너무 오래 걸린다). */
+const SMALL_FILE_BYTES = 2 * 1024 * 1024
+/** 묶음 하나의 크기. 서버 상한(32MB)보다 작게 둔다. */
+const BUNDLE_BYTES = 16 * 1024 * 1024
 const MAX_DEPS = 30                           // 서버 상한(함께 설치할 애드온 지정 개수)과 같다
 
 /** NEW: 서버에 없음, CHANGED: 내용이 다름, DEPS: 내용은 같지만 함께 설치할 애드온 정보만 갱신, SAME: 같음 */
@@ -114,17 +118,28 @@ async function readSourceFile(root: FileSystemDirectoryHandle, folder: string, p
   return new Uint8Array(await file.arrayBuffer())
 }
 
-/** 조각 하나를 올린다. 일시적인 오류는 다시 시도하고, 서버가 "다음 위치는 N" 이라고 하면(응답이 유실된 경우) 그 위치부터 이어 올린다. */
-async function uploadFile(uploadId: string, path: string, data: Uint8Array, onSent: (bytes: number) => void) {
+/** 서버가 거부한 오류(4xx)는 다시 해도 같으므로 바로 알리고, 네트워크·서버 일시 오류만 몇 번 다시 시도한다. */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) throw e
+      if (attempt > 3) throw e
+      await sleep(1000 * attempt)
+    }
+  }
+}
+
+/** 큰 파일 하나를 조각으로 이어 올린다. 서버가 "다음 위치는 N" 이라고 하면(응답이 유실된 경우) 그 위치부터 이어 올린다. */
+async function uploadLargeFile(uploadId: string, path: string, data: Uint8Array, onSent: (bytes: number) => void) {
   let offset = 0
-  let attempt = 0
   while (offset < data.byteLength) {
     const end = Math.min(offset + CHUNK_BYTES, data.byteLength)
     try {
-      await api.adminUploadChunk(uploadId, path, offset, new Blob([data.subarray(offset, end) as unknown as BlobPart]))
+      await withRetry(() => api.adminUploadChunk(uploadId, path, offset, new Blob([data.subarray(offset, end) as unknown as BlobPart])))
       onSent(end - offset)
       offset = end
-      attempt = 0
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         const next = Number(/(\d+)/.exec(e.message)?.[1])
@@ -134,17 +149,31 @@ async function uploadFile(uploadId: string, path: string, data: Uint8Array, onSe
           continue
         }
       }
-      // 서버가 거부한 경우(검사 실패 등)는 다시 해도 같으므로 바로 알린다. 네트워크 오류만 몇 번 다시 시도한다.
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) throw e
-      if (++attempt > 3) throw e
-      await sleep(1000 * attempt)
+      throw e
     }
   }
 }
 
+/** 묶음 형식: 파일마다 [경로 길이 2바이트][경로 UTF-8][크기 8바이트][내용](big-endian). 서버 LibraryUploadService.bundle 과 같다. */
+function packBundle(entries: { path: string; data: Uint8Array }[]): Blob {
+  const encoder = new TextEncoder()
+  const parts: BlobPart[] = []
+  for (const e of entries) {
+    const path = encoder.encode(e.path)
+    const head = new Uint8Array(2 + path.length + 8)
+    head[0] = path.length >> 8
+    head[1] = path.length & 0xff
+    head.set(path, 2)
+    new DataView(head.buffer).setBigUint64(2 + path.length, BigInt(e.data.byteLength))
+    parts.push(head, e.data as unknown as BlobPart)
+  }
+  return new Blob(parts)
+}
+
 /**
  * 애드온 폴더 하나를 서버 자료실에 올린다. 같은 이름이면 새 내용으로 바뀐다.
- * 파일 목록을 먼저 보내 서버가 "올려야 할 파일"만 알려 주면, 그 파일만 조각으로 이어 올린다(이미 서버에 있는 같은 파일은 건너뜀).
+ * 파일 목록을 먼저 보내 서버가 "올려야 할 파일"만 알려 주면, 그 파일만 올린다(이미 서버에 있는 같은 파일은 건너뜀).
+ * 작은 파일은 묶음으로 한꺼번에 올리고(요청 수는 파일 수가 아니라 용량에 비례), 큰 파일만 조각으로 이어 올린다.
  */
 export async function uploadFolder(
   source: FileSystemDirectoryHandle,
@@ -156,14 +185,47 @@ export async function uploadFolder(
   try {
     const sizeByPath = new Map(row.files.map((f) => [f.path, f.size]))
     const totalBytes = begin.needed.reduce((n, p) => n + (sizeByPath.get(p) ?? 0), 0)
-    let sent = 0
-    for (const [i, path] of begin.needed.entries()) {
-      const data = await readSourceFile(source, row.name, path)       // 파일 하나만 메모리에 올린다
+    let sentBytes = 0
+    let sentFiles = 0
+    const report = () => onProgress(`올리는 중 ${row.name}: ${sentFiles}/${begin.needed.length} 파일 (${mb(sentBytes)}/${mb(totalBytes)}MB)`)
+
+    const small = begin.needed.filter((p) => (sizeByPath.get(p) ?? 0) <= SMALL_FILE_BYTES)
+    const large = begin.needed.filter((p) => (sizeByPath.get(p) ?? 0) > SMALL_FILE_BYTES)
+    const read = async (path: string) => {
+      const data = await readSourceFile(source, row.name, path)       // 파일 하나(또는 한 묶음)만 메모리에 올린다
       if (data.byteLength !== sizeByPath.get(path)) throw new Error(`'${path}' 파일이 읽는 사이에 바뀌었습니다. 동기화 계획을 다시 만들어 주세요.`)
-      await uploadFile(begin.uploadId, path, data, (bytes) => {
-        sent += bytes
-        onProgress(`올리는 중 ${row.name}: ${i + 1}/${begin.needed.length} 파일 (${mb(sent)}/${mb(totalBytes)}MB)`)
+      return data
+    }
+
+    // 작은 파일: 묶음 하나가 BUNDLE_BYTES 를 넘지 않게 모아서 올린다
+    let batch: { path: string; data: Uint8Array }[] = []
+    let batchBytes = 0
+    const flush = async () => {
+      if (batch.length === 0) return
+      const blob = packBundle(batch)
+      await withRetry(() => api.adminUploadBundle(begin.uploadId, blob))
+      sentFiles += batch.length
+      sentBytes += batchBytes
+      batch = []
+      batchBytes = 0
+      report()
+    }
+    for (const path of small) {
+      const data = await read(path)
+      if (batchBytes + data.byteLength > BUNDLE_BYTES) await flush()
+      batch.push({ path, data })
+      batchBytes += data.byteLength
+    }
+    await flush()
+
+    // 큰 파일: 파일 하나씩 조각으로 이어 올린다
+    for (const path of large) {
+      await uploadLargeFile(begin.uploadId, path, await read(path), (bytes) => {
+        sentBytes += bytes
+        report()
       })
+      sentFiles++
+      report()
     }
     return await api.adminUploadComplete(begin.uploadId)
   } catch (e) {

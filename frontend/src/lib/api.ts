@@ -72,14 +72,23 @@ export const api = {
   library: () => json<LibraryAddon[]>('/library'),
   /** 애드온의 파일 목록(경로·크기·SHA-256). 받는 쪽이 파일별로 내려받아 해시로 검증한다. */
   libraryManifest: (id: string) => json<ManifestFile[]>(`/library/${id}/manifest`),
-  /** 파일 하나(폴더 기준 상대 경로) */
-  libraryFile: async (id: string, path: string): Promise<Uint8Array> => {
-    const res = await send(`/library/${id}/file?path=${encodeURIComponent(path)}`)
-    return new Uint8Array(await res.arrayBuffer())
+  /**
+   * 요청한 파일들(폴더 기준 상대 경로)을 하나의 스트림으로 받는다. 파일마다 [경로 길이 2][경로][크기 8][내용].
+   * 파일마다 요청하면 수천 개짜리 애드온은 너무 느려서 한 요청에 이어 받는다.
+   */
+  libraryBundle: async (id: string, paths: string[]): Promise<ReadableStream<Uint8Array>> => {
+    const res = await send(`/library/${id}/bundle`, body({ paths }))
+    if (!res.body) throw new Error('받는 스트림을 열 수 없습니다.')
+    return res.body
   },
   // 관리자 올리기: 파일 목록을 먼저 보내 서버가 "올려야 할 파일"만 알려 주면, 그 파일을 조각으로 이어 올린 뒤 끝낸다.
   adminUploadBegin: (folder: string, note: string, files: ManifestFile[]) =>
     json<{ uploadId: string; needed: string[] }>('/admin/library/uploads', body({ folder, note, files })),
+  /** 작은 파일 여러 개를 이어 붙인 묶음 하나(최대 32MB)를 올린다. 이미 받은 파일은 서버가 건너뛰므로 다시 보내도 안전하다. */
+  adminUploadBundle: (uploadId: string, bundle: Blob) =>
+    json<{ accepted: number }>(`/admin/library/uploads/${uploadId}/bundle`, {
+      method: 'PUT', body: bundle, headers: { 'Content-Type': 'application/octet-stream' },
+    }),
   adminUploadChunk: (uploadId: string, path: string, offset: number, chunk: Blob) =>
     json<{ received: number; done: boolean }>(`/admin/library/uploads/${uploadId}/chunk?path=${encodeURIComponent(path)}&offset=${offset}`, {
       method: 'PUT', body: chunk, headers: { 'Content-Type': 'application/octet-stream' },

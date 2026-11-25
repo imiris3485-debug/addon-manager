@@ -12,8 +12,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -60,6 +63,8 @@ public class LibraryUploadService {
     static final int MAX_FILES = 20_000;
     /** 프록시(Cloudflare)의 요청 크기 제한(100MB)보다 훨씬 작게 둔다 */
     static final int MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+    /** 작은 파일 묶음 하나의 상한(메모리에 올려 한 파일씩 검증한다). 프록시의 요청 크기 제한(100MB)보다 훨씬 작게 둔다. */
+    static final int MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
     private static final Duration SESSION_TTL = Duration.ofHours(12);
     private static final int MAX_NOTE = 500;
     private static final Pattern HEX64 = Pattern.compile("^[0-9a-f]{64}$");
@@ -244,6 +249,59 @@ public class LibraryUploadService {
                 throw new BusinessException(ErrorCode.INTERNAL_SERVER_ERROR, "파일을 저장하지 못했습니다.");
             }
         }
+    }
+
+    /**
+     * 작은 파일 여러 개를 한 번에 올린다. 파일마다 요청을 보내면 수천 개짜리 애드온은 너무 오래 걸려서, 작은 파일은 묶어서 보낸다.
+     * 묶음 형식은 파일마다 [경로 길이 2바이트][경로 UTF-8][크기 8바이트][내용](big-endian)이다.
+     * 파일마다 목록에 있는 경로인지, 선언한 크기·SHA-256 과 같은지 확인한 것만 저장한다. 이미 받은 파일은 건너뛰므로 다시 보내도 안전하다.
+     *
+     * @return 이번에 새로 받은 파일 수
+     */
+    public int bundle(Long adminId, String uploadId, InputStream body) {
+        Session s = session(adminId, uploadId);
+        byte[] all;
+        try {
+            all = body.readNBytes(MAX_BUNDLE_BYTES + 1);
+        } catch (IOException e) {
+            throw bad("묶음을 읽을 수 없습니다.");
+        }
+        if (all.length > MAX_BUNDLE_BYTES) throw bad("묶음이 너무 큽니다(최대 " + (MAX_BUNDLE_BYTES / 1024 / 1024) + "MB).");
+
+        DataInputStream in = new DataInputStream(new ByteArrayInputStream(all));
+        int accepted = 0;
+        synchronized (s) {
+            try {
+                while (in.available() > 0) {
+                    int pathLen = in.readUnsignedShort();
+                    if (pathLen == 0 || pathLen > 240) throw bad("묶음 형식이 올바르지 않습니다.");
+                    byte[] pathBytes = new byte[pathLen];
+                    in.readFully(pathBytes);
+                    String path = String.join("/", AddonZipInspector.validatePath(new String(pathBytes, StandardCharsets.UTF_8)));
+                    long size = in.readLong();
+                    if (size < 0 || size > in.available()) throw bad("묶음이 잘려 있습니다.");
+                    byte[] data = new byte[(int) size];
+                    in.readFully(data);
+
+                    FileSpec spec = s.specs.get(path);
+                    if (spec == null) throw bad("올리기 목록에 없는 파일입니다: " + AddonZipInspector.shorten(path));
+                    if (s.done.contains(path)) continue;
+                    if (spec.size() != size) throw bad("선언한 크기와 다른 파일입니다: " + AddonZipInspector.shorten(path));
+                    if (!LibraryLayout.sha256Hex(data).equals(spec.sha256())) {
+                        throw bad("파일 내용이 올라오는 도중 달라졌습니다. 다시 올려 주세요: " + AddonZipInspector.shorten(path));
+                    }
+                    Path file = LibraryLayout.resolveInside(LibraryLayout.dataDir(s.dir), path);
+                    Files.createDirectories(file.getParent());
+                    Files.write(file, data);       // 이어 올리다 만 조각이 있었다면 덮어쓴다
+                    s.done.add(path);
+                    accepted++;
+                }
+            } catch (IOException e) {
+                log.warn("올리는 묶음을 처리하지 못했습니다", e);
+                throw bad("묶음 형식이 올바르지 않거나 저장하지 못했습니다.");
+            }
+        }
+        return accepted;
     }
 
     public LibraryAddonResponse complete(Long adminId, String uploadId) {

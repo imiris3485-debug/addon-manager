@@ -22,6 +22,15 @@ public class LibraryParams {
         private List<String> requires;
     }
 
+    /** 한 번에 받을 파일들의 경로(폴더 기준 상대 경로). 서버의 파일 목록에 있는 것만 허용된다. */
+    @Getter
+    @NoArgsConstructor
+    public static class BundleParam {
+        @NotEmpty(message = "경로가 없습니다")
+        @Size(max = 20000, message = "한 번에 받을 수 있는 파일 수를 넘었습니다")
+        private List<@NotBlank @Size(max = 240) String> paths;
+    }
+
     /**
      * 올리기 시작. 올릴 애드온의 파일 목록(경로·크기·SHA-256)을 먼저 보낸다.
      * 서버가 목록을 검사하고, 이미 있는 같은 파일은 다시 받지 않도록 "올려야 할 파일"만 돌려준다.

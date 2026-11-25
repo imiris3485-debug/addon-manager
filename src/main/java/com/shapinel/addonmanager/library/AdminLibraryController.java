@@ -3,6 +3,7 @@ package com.shapinel.addonmanager.library;
 import com.shapinel.addonmanager.library.domain.param.LibraryParams.BeginParam;
 import com.shapinel.addonmanager.library.domain.param.LibraryParams.RequiresParam;
 import com.shapinel.addonmanager.library.domain.response.LibraryResponses.BeginResponse;
+import com.shapinel.addonmanager.library.domain.response.LibraryResponses.BundleResponse;
 import com.shapinel.addonmanager.library.domain.response.LibraryResponses.ChunkResponse;
 import com.shapinel.addonmanager.library.domain.response.LibraryResponses.LibraryAddonResponse;
 import com.shapinel.addonmanager.security.jwt.JwtClaims;
@@ -61,6 +62,15 @@ public class AdminLibraryController {
                                                @RequestParam String path, @RequestParam long offset,
                                                HttpServletRequest request) throws IOException {
         return ResponseEntity.ok(uploadService.chunk(JwtClaims.userId(jwt), uploadId, path, offset, request.getInputStream()));
+    }
+
+    @Operation(summary = "작은 파일 묶음 올리기",
+            description = "작은 파일 여러 개를 하나로 이어 올린다(파일마다 [경로 길이 2][경로][크기 8][내용], 최대 32MB). "
+                    + "파일마다 목록의 경로·크기·SHA-256 을 확인하고, 이미 받은 파일은 건너뛰므로 다시 보내도 안전하다")
+    @PutMapping("/uploads/{uploadId}/bundle")
+    public ResponseEntity<BundleResponse> bundle(@AuthenticationPrincipal Jwt jwt, @PathVariable String uploadId,
+                                                 HttpServletRequest request) throws IOException {
+        return ResponseEntity.ok(new BundleResponse(uploadService.bundle(JwtClaims.userId(jwt), uploadId, request.getInputStream())));
     }
 
     @Operation(summary = "올리기 끝내기", description = "모든 파일이 올라왔는지 확인하고 자료실에 반영한다(같은 폴더가 있으면 새 내용으로 바뀐다)")

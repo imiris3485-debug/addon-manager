@@ -1,22 +1,24 @@
 package com.shapinel.addonmanager.library;
 
+import com.shapinel.addonmanager.library.domain.param.LibraryParams.BundleParam;
 import com.shapinel.addonmanager.library.domain.response.LibraryResponses.FileResponse;
 import com.shapinel.addonmanager.library.domain.response.LibraryResponses.LibraryAddonResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.io.Resource;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -44,13 +46,14 @@ public class LibraryController {
         return ResponseEntity.ok(libraryService.manifest(id));
     }
 
-    @Operation(summary = "애드온 파일 받기", description = "목록에 있는 파일 하나를 내려준다. 경로는 폴더 기준 상대 경로(로그인 필요)")
-    @GetMapping("/{id}/file")
-    public ResponseEntity<Resource> file(@PathVariable String id, @RequestParam String path) {
-        Resource file = libraryService.file(id, path);
-        return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("file.bin").build().toString())
-                .body(file);
+    @Operation(summary = "애드온 파일 묶음 받기",
+            description = "목록에 있는 파일들을 하나의 스트림에 이어 담아 내려준다(파일마다 [경로 길이 2][경로][크기 8][내용]). "
+                    + "파일이 수천 개여도 요청 한 번으로 받는다(로그인 필요)")
+    @PostMapping("/{id}/bundle")
+    public void bundle(@PathVariable String id, @RequestBody @Valid BundleParam param, HttpServletResponse response) throws IOException {
+        // 검사는 응답을 쓰기 전에 끝낸다(목록에 없는 경로면 404). 스트림은 요청 스레드에서 바로 쓴다.
+        var entries = libraryService.prepareBundle(id, param.getPaths());
+        response.setContentType(MediaType.APPLICATION_OCTET_STREAM_VALUE);
+        LibraryService.writeBundle(entries, response.getOutputStream());
     }
 }

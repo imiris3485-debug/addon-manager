@@ -48,6 +48,14 @@ public class LibraryResponses {
         private List<String> needed;
     }
 
+    /** 작은 파일 묶음을 올린 결과 */
+    @Getter
+    @AllArgsConstructor
+    public static class BundleResponse {
+        /** 이번 요청에서 새로 받아 해시까지 확인한 파일 수 */
+        private int accepted;
+    }
+
     /** 파일 조각을 올린 결과 */
     @Getter
     @AllArgsConstructor

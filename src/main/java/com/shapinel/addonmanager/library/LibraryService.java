@@ -9,18 +9,24 @@ import com.shapinel.addonmanager.library.domain.response.LibraryResponses.Librar
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -63,15 +69,60 @@ public class LibraryService {
         return specs(id).values().stream().map(f -> new FileResponse(f.path(), f.size(), f.sha256())).toList();
     }
 
-    /** 내려줄 파일 하나. 목록에 없는 경로이거나 파일이 없으면 NOT_FOUND. */
-    public Resource file(String publicId, String rawPath) {
+    /** 묶음에 담을 파일 하나 */
+    record BundleEntry(String path, Path file, long size) {
+    }
+
+    static final int MAX_BUNDLE_PATHS = 20_000;
+
+    /**
+     * 요청한 파일들을 한 번에 내려주기 위해 검사한다. 파일마다 요청을 보내면 3천 개짜리 애드온은 요청이 3천 번이라 너무 느리므로
+     * 파일들을 하나의 스트림에 이어 담아 내려준다. 목록에 없는 경로가 하나라도 있으면 NOT_FOUND 로 거부한다.
+     */
+    public List<BundleEntry> prepareBundle(String publicId, List<String> rawPaths) {
         String id = requireItem(publicId);
-        // 요청이 준 경로를 파일 이름으로 쓰지 않는다: 검사한 뒤 "목록에 있는 경로"와 정확히 같을 때만 그 파일을 연다.
-        String path = String.join("/", AddonZipInspector.validatePath(rawPath == null ? "" : rawPath));
-        if (!specs(id).containsKey(path)) throw new BusinessException(ErrorCode.NOT_FOUND);
-        Path file = LibraryLayout.resolveInside(LibraryLayout.dataDir(LibraryLayout.itemDir(storageDir, id)), path);
-        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw new BusinessException(ErrorCode.NOT_FOUND, "파일을 찾을 수 없습니다.");
-        return new FileSystemResource(file);
+        if (rawPaths == null || rawPaths.isEmpty() || rawPaths.size() > MAX_BUNDLE_PATHS) throw bad("파일 경로는 1~" + MAX_BUNDLE_PATHS + "개여야 합니다.");
+        Map<String, FileSpec> specs = specs(id);
+        Path data = LibraryLayout.dataDir(LibraryLayout.itemDir(storageDir, id));
+        Set<String> seen = new HashSet<>();
+        List<BundleEntry> out = new ArrayList<>();
+        for (String raw : rawPaths) {
+            // 요청이 준 경로를 파일 이름으로 쓰지 않는다: 검사한 뒤 "목록에 있는 경로"와 정확히 같을 때만 그 파일을 연다.
+            String path = String.join("/", AddonZipInspector.validatePath(raw == null ? "" : raw));
+            FileSpec spec = specs.get(path);
+            if (spec == null) throw new BusinessException(ErrorCode.NOT_FOUND);
+            if (!seen.add(path)) continue;
+            Path file = LibraryLayout.resolveInside(data, path);
+            if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw new BusinessException(ErrorCode.NOT_FOUND, "파일을 찾을 수 없습니다.");
+            out.add(new BundleEntry(path, file, spec.size()));
+        }
+        return out;
+    }
+
+    /**
+     * 묶음 형식: 파일마다 [경로 길이 2바이트][경로 UTF-8][크기 8바이트][내용] 을 이어 붙인다(모두 big-endian).
+     * 받는 쪽은 스트림으로 읽으면서 파일 하나씩 크기·SHA-256 을 확인하고 쓴다. 내용이 목록의 크기보다 짧으면 예외로 끊어서
+     * 받는 쪽이 잘린 파일을 정상으로 받아들이지 않게 한다.
+     */
+    static void writeBundle(List<BundleEntry> entries, OutputStream out) throws IOException {
+        DataOutputStream data = new DataOutputStream(new BufferedOutputStream(out, 64 * 1024));
+        byte[] buf = new byte[64 * 1024];
+        for (BundleEntry e : entries) {
+            byte[] path = e.path().getBytes(StandardCharsets.UTF_8);
+            data.writeShort(path.length);
+            data.write(path);
+            data.writeLong(e.size());
+            try (InputStream in = Files.newInputStream(e.file())) {
+                long remaining = e.size();
+                while (remaining > 0) {
+                    int read = in.read(buf, 0, (int) Math.min(buf.length, remaining));
+                    if (read < 0) throw new IOException("파일이 목록보다 짧습니다: " + e.path());
+                    data.write(buf, 0, read);
+                    remaining -= read;
+                }
+            }
+        }
+        data.flush();
     }
 
     /**

@@ -18,6 +18,8 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -197,6 +199,76 @@ class LibraryUploadServiceTest {
                 .isInstanceOf(BusinessException.class).extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND);
         assertThatThrownBy(() -> service.complete(2L, r.getUploadId())).isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> service.complete(ADMIN, "../x")).isInstanceOf(BusinessException.class);
+    }
+
+    // ---------------------------------------------------------------------------------------------- 작은 파일 묶음
+
+    /** [경로 길이 2][경로][크기 8][내용] 형식의 묶음 */
+    private static byte[] pack(String... pairs) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DataOutputStream d = new DataOutputStream(out);
+        for (int i = 0; i < pairs.length; i += 2) {
+            byte[] path = bytes(pairs[i]);
+            byte[] data = bytes(pairs[i + 1]);
+            d.writeShort(path.length);
+            d.write(path);
+            d.writeLong(data.length);
+            d.write(data);
+        }
+        return out.toByteArray();
+    }
+
+    private int putBundle(String uploadId, byte[] bundle) {
+        return service.bundle(ADMIN, uploadId, new ByteArrayInputStream(bundle));
+    }
+
+    @Test
+    void 작은_파일_여러_개를_한_번에_올린다() throws IOException {
+        BeginResponse r = begin(file("Details.toc", TOC), file("a.lua", "aaa"), file("libs/b.lua", "bbbb"));
+
+        assertThat(putBundle(r.getUploadId(), pack("Details.toc", TOC, "a.lua", "aaa", "libs/b.lua", "bbbb"))).isEqualTo(3);
+
+        assertThat(Files.readString(dir.resolve(".uploads").resolve(r.getUploadId()).resolve("data/libs/b.lua"))).isEqualTo("bbbb");
+        assertThat(service.complete(ADMIN, r.getUploadId()).getName()).isEqualTo("Details");   // 묶음만으로 끝낼 수 있다
+    }
+
+    @Test
+    void 같은_묶음을_다시_보내도_이미_받은_파일은_건너뛴다() throws IOException {
+        BeginResponse r = begin(file("Details.toc", TOC), file("a.lua", "aaa"));
+        byte[] bundle = pack("Details.toc", TOC, "a.lua", "aaa");
+
+        assertThat(putBundle(r.getUploadId(), bundle)).isEqualTo(2);
+        assertThat(putBundle(r.getUploadId(), bundle)).isEqualTo(0);
+    }
+
+    @Test
+    void 묶음_안의_해시나_크기가_다른_파일과_목록에_없는_경로는_거부한다() throws IOException {
+        BeginResponse r = begin(file("Details.toc", TOC), file("a.lua", "aaa"));
+
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), pack("a.lua", "xxx"))).isInstanceOf(BusinessException.class).hasMessageContaining("달라졌습니다");
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), pack("a.lua", "aaaa"))).isInstanceOf(BusinessException.class).hasMessageContaining("크기");
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), pack("other.lua", "x"))).isInstanceOf(BusinessException.class).hasMessageContaining("목록에 없는");
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), pack("../escape.lua", "x"))).isInstanceOf(BusinessException.class);
+        assertThat(dir.resolve("escape.lua")).doesNotExist();
+    }
+
+    @Test
+    void 깨졌거나_잘린_묶음과_너무_큰_묶음은_거부한다() throws IOException {
+        BeginResponse r = begin(file("Details.toc", TOC));
+        byte[] good = pack("Details.toc", TOC);
+
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), java.util.Arrays.copyOf(good, good.length - 3))).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), new byte[]{0, 0, 0})).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> putBundle(r.getUploadId(), new byte[LibraryUploadService.MAX_BUNDLE_BYTES + 1]))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("너무 큽니다");
+    }
+
+    @Test
+    void 다른_관리자는_묶음을_올릴_수_없다() throws IOException {
+        BeginResponse r = begin(file("Details.toc", TOC));
+
+        assertThatThrownBy(() -> service.bundle(2L, r.getUploadId(), new ByteArrayInputStream(pack("Details.toc", TOC))))
+                .isInstanceOf(BusinessException.class).extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND);
     }
 
     // ---------------------------------------------------------------------------------------------- 끝내기

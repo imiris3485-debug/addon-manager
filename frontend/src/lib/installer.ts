@@ -2,16 +2,13 @@ import { combineFileHashes, sha256Hex } from './hash'
 
 /**
  * 애드온 설치(파일 단위). 서버가 준 "파일 목록(경로·크기·SHA-256)"을 검사한 뒤, 내 폴더에 이미 있는 같은 파일은 그대로 두고
- * 바뀌었거나 없는 파일만 하나씩 내려받아 해시를 확인하고 쓴다. 파일 하나만 메모리에 올리므로 애드온이 아무리 커도 설치할 수 있고,
- * 업데이트 때는 바뀐 파일만 받는다.
+ * 바뀌었거나 없는 파일만 묶음 스트림으로 내려받아 파일마다 해시를 확인하고 쓴다. 파일 하나만 메모리에 올리므로 애드온이 아무리
+ * 커도 설치할 수 있고, 파일이 수천 개여도 요청은 몇 번뿐이며, 업데이트 때는 바뀐 파일만 받는다.
  */
 
 const MAX_FILES = 20_000
 /** 서버의 파일 하나 상한과 같다(데스크톱 앱의 파일 상한 300MB 보다 작다) */
 const MAX_FILE_BYTES = 250 * 1024 * 1024
-/** 한 번에 내려받는 파일들의 크기 합 상한. 이 안에서 여러 파일을 동시에 받아 작은 파일이 많은 애드온도 빨리 받는다. */
-const BATCH_BYTES = 96 * 1024 * 1024
-const BATCH_FILES = 6
 
 /**
  * 설치를 허용하는 파일 확장자. 서버의 AddonZipInspector 와 같은 목록이다.
@@ -126,9 +123,15 @@ async function readFile(root: FileSystemDirectoryHandle, folder: string, path: s
   return new Uint8Array(await file.arrayBuffer())
 }
 
-async function writeFile(root: FileSystemDirectoryHandle, folder: string, path: string, data: Uint8Array) {
+async function writeFile(root: FileSystemDirectoryHandle, folder: string, path: string, data: Uint8Array, dirCache: Map<string, FileSystemDirectoryHandle>) {
   const parts = [folder, ...path.split('/')]
-  const dir = await ensureDir(root, parts.slice(0, -1))
+  const dirParts = parts.slice(0, -1)
+  const dirKey = dirParts.join('/')
+  let dir = dirCache.get(dirKey)
+  if (!dir) {
+    dir = await ensureDir(root, dirParts)
+    dirCache.set(dirKey, dir)
+  }
   const handle = await dir.getFileHandle(parts[parts.length - 1], { create: true })
   const writable = await handle.createWritable()
   await writable.write(data as unknown as BufferSource)
@@ -146,24 +149,109 @@ export async function removeFolder(root: FileSystemDirectoryHandle, name: string
 
 const mb = (n: number) => (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)
 
+/** 내려받은 내용이 목록과 다르다(변조·전송 오류). 다시 시도해도 같으므로 재시도하지 않는다. */
+export class IntegrityError extends Error {}
+
+/**
+ * 스트림에서 필요한 만큼씩 읽는다. 도착한 조각은 목록에 쌓아 두었다가 필요한 길이만큼 한 번에 합친다(복사를 줄이려는 것).
+ */
+class StreamReader {
+  private chunks: Uint8Array[] = []
+  private length = 0
+  private ended = false
+
+  constructor(private readonly reader: ReadableStreamDefaultReader<Uint8Array>) {}
+
+  /** 정확히 n 바이트. 읽기 전에 스트림이 이미 끝났으면 null, 중간에 끝났으면 오류. */
+  async read(n: number): Promise<Uint8Array | null> {
+    if (n === 0) return new Uint8Array(0)
+    while (this.length < n && !this.ended) {
+      const { value, done } = await this.reader.read()
+      if (done) this.ended = true
+      else if (value && value.byteLength > 0) {
+        this.chunks.push(value)
+        this.length += value.byteLength
+      }
+    }
+    if (this.length === 0 && this.ended) return null
+    if (this.length < n) throw new Error('받던 중 연결이 끊겼습니다. 다시 시도하세요.')
+    const out = new Uint8Array(n)
+    let offset = 0
+    while (offset < n) {
+      const c = this.chunks[0]
+      const take = Math.min(c.byteLength, n - offset)
+      out.set(c.subarray(0, take), offset)
+      offset += take
+      if (take === c.byteLength) this.chunks.shift()
+      else this.chunks[0] = c.subarray(take)
+    }
+    this.length -= n
+    return out
+  }
+
+  async readExact(n: number): Promise<Uint8Array> {
+    const data = await this.read(n)
+    if (!data) throw new Error('받던 중 연결이 끊겼습니다. 다시 시도하세요.')
+    return data
+  }
+}
+
+/**
+ * 파일 묶음 스트림을 읽으면서 파일 하나씩 확인해 넘긴다.
+ * 묶음 형식: 파일마다 [경로 길이 2바이트][경로 UTF-8][크기 8바이트][내용](big-endian). 파일이 수천 개여도 요청 한 번으로 받는다.
+ * 요청하지 않은 경로, 목록과 다른 크기, 같은 파일의 중복은 거부한다. 파일 하나만 메모리에 올린다.
+ */
+async function receiveBundle(
+  stream: ReadableStream<Uint8Array>,
+  expected: Map<string, ManifestFile>,
+  onFile: (file: ManifestFile, data: Uint8Array) => Promise<void>,
+): Promise<void> {
+  const reader = new StreamReader(stream.getReader())
+  const decoder = new TextDecoder()
+  const seen = new Set<string>()
+  for (;;) {
+    const head = await reader.read(2)
+    if (!head) break
+    const path = decoder.decode(await reader.readExact((head[0] << 8) | head[1]))
+    const sizeBytes = await reader.readExact(8)
+    const size = Number(new DataView(sizeBytes.buffer, sizeBytes.byteOffset, 8).getBigUint64(0))
+    const spec = expected.get(path)
+    if (!spec) throw new IntegrityError(`요청하지 않은 파일이 왔습니다: ${path.slice(0, 80)}`)
+    if (seen.has(path)) throw new IntegrityError(`같은 파일이 두 번 왔습니다: ${path.slice(0, 80)}`)
+    if (size !== spec.size) throw new IntegrityError(`'${path}' 의 크기가 목록과 다릅니다(전송 오류일 수 있습니다). 잠시 뒤 다시 시도하세요.`)
+    const data = await reader.readExact(size)
+    if (await sha256Hex(data) !== spec.sha256) throw new IntegrityError(`'${path}' 의 내용이 목록과 다릅니다(전송 오류일 수 있습니다). 잠시 뒤 다시 시도하세요.`)
+    await onFile(spec, data)
+    seen.add(path)
+  }
+  const missing = [...expected.keys()].filter((p) => !seen.has(p))
+  if (missing.length > 0) throw new Error(`받은 묶음에 빠진 파일이 ${missing.length}개 있습니다. 다시 시도하세요.`)
+}
+
+/** 요청 하나로 받을 파일 수·크기의 상한. 이 단위로 나눠 받으면 중간에 끊겨도 받은 만큼은 남는다. */
+const REQUEST_FILES = 5000
+const REQUEST_BYTES = 256 * 1024 * 1024
+const RETRIES = 2
+
 /**
  * 애드온 하나를 설치·갱신한다.
  *
  * 1. 파일 목록을 검사하고, 목록의 해시가 자료실이 알려 준 내용 해시와 같은지 확인한다(어긋나면 아무것도 쓰지 않는다).
  * 2. 내 폴더의 같은 경로 파일이 크기와 SHA-256 까지 같으면 그대로 둔다.
- * 3. 나머지는 하나씩 내려받아 크기와 SHA-256 을 확인한 뒤에만 쓴다(확인에 실패한 파일은 쓰지 않는다).
+ * 3. 나머지는 묶음 스트림으로 받는다. 요청 한 번에 여러 파일이 오고(수천 개여도 요청은 몇 번뿐), 파일마다 크기와 SHA-256 을
+ *    확인한 뒤에만 쓴다(확인에 실패한 파일은 쓰지 않는다). 네트워크 오류는 받은 파일을 뺀 나머지만 다시 요청한다.
  * 4. 목록에 없는 옛 파일은 지운다(이전 버전에만 있던 파일이 남지 않게). 설정(SavedVariables)은 AddOns 밖(WTF)이라 영향이 없다.
  *
  * ⚠️ 도중에 실패하면 폴더가 일부만 새 내용일 수 있다. 다시 설치하면 이미 받은 파일은 건너뛰고 이어서 받는다.
  *
- * @param fetchFile 목록의 경로로 파일 내용을 내려받는다
+ * @param fetchBundle 요청한 경로들의 파일을 묶음 스트림으로 내려받는다
  */
 export async function installAddonFiles(
   root: FileSystemDirectoryHandle,
   folder: string,
   files: ManifestFile[],
   expectedHash: string,
-  fetchFile: (path: string) => Promise<Uint8Array>,
+  fetchBundle: (paths: string[]) => Promise<ReadableStream<Uint8Array>>,
   onProgress: (message: string) => void = () => undefined,
 ): Promise<InstallResult> {
   validateManifest(folder, files)
@@ -181,7 +269,7 @@ export async function installAddonFiles(
   for (const [i, f] of files.entries()) {
     const existing = localByLower.get(f.path.toLowerCase())
     if (existing) {
-      onProgress(`${folder}: 내 폴더와 비교하는 중 (${i + 1}/${files.length})`)
+      if (i % 50 === 0) onProgress(`${folder}: 내 폴더와 비교하는 중 (${i + 1}/${files.length})`)
       const data = await readFile(root, folder, existing)
       if (data.byteLength === f.size && await sha256Hex(data) === f.sha256) {
         unchanged++
@@ -191,26 +279,38 @@ export async function installAddonFiles(
     need.push(f)
   }
 
-  // 바뀌었거나 없는 파일을 받는다. 파일 하나만 메모리에 올리지 않고 크기 합이 일정 이하인 몇 개씩 묶어 동시에 받는다.
+  // 바뀌었거나 없는 파일을 받는다
   const totalBytes = need.reduce((n, f) => n + f.size, 0)
-  let doneFiles = 0
+  const written = new Set<string>()
   let doneBytes = 0
-  for (let i = 0; i < need.length;) {
-    const batch: ManifestFile[] = []
-    let size = 0
-    while (i < need.length && batch.length < BATCH_FILES && (batch.length === 0 || size + need[i].size <= BATCH_BYTES)) {
-      size += need[i].size
-      batch.push(need[i++])
+  const dirCache = new Map<string, FileSystemDirectoryHandle>()    // 같은 폴더를 파일마다 다시 확인하지 않게 한다
+  const save = async (f: ManifestFile, data: Uint8Array) => {
+    await writeFile(root, folder, f.path, data, dirCache)
+    written.add(f.path)
+    doneBytes += f.size
+    if (written.size % 20 === 0 || written.size === need.length) {
+      onProgress(`${folder}: ${written.size}/${need.length} 파일 받는 중 (${mb(doneBytes)}/${mb(totalBytes)}MB)`)
     }
-    await Promise.all(batch.map(async (f) => {
-      const data = await fetchFile(f.path)
-      if (data.byteLength !== f.size) throw new Error(`'${f.path}' 의 크기가 목록과 다릅니다(전송 오류일 수 있습니다). 잠시 뒤 다시 시도하세요.`)
-      if (await sha256Hex(data) !== f.sha256) throw new Error(`'${f.path}' 의 내용이 목록과 다릅니다(전송 오류일 수 있습니다). 잠시 뒤 다시 시도하세요.`)
-      await writeFile(root, folder, f.path, data)
-      doneFiles++
-      doneBytes += f.size
-      onProgress(`${folder}: ${doneFiles}/${need.length} 파일 받는 중 (${mb(doneBytes)}/${mb(totalBytes)}MB)`)
-    }))
+  }
+  for (let i = 0; i < need.length;) {
+    const group: ManifestFile[] = []
+    let size = 0
+    while (i < need.length && group.length < REQUEST_FILES && (group.length === 0 || size + need[i].size <= REQUEST_BYTES)) {
+      size += need[i].size
+      group.push(need[i++])
+    }
+    for (let attempt = 0; ; attempt++) {
+      const remaining = group.filter((f) => !written.has(f.path))
+      if (remaining.length === 0) break
+      try {
+        await receiveBundle(await fetchBundle(remaining.map((f) => f.path)), new Map(remaining.map((f) => [f.path, f])), save)
+        break
+      } catch (e) {
+        if (e instanceof IntegrityError || attempt >= RETRIES) throw e
+        onProgress(`${folder}: 연결 오류로 이어서 다시 받는 중...`)
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)))
+      }
+    }
   }
 
   // 목록에 없는 옛 파일 지우기

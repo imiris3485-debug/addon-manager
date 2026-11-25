@@ -84,6 +84,11 @@ final class LibraryLayout {
         return HexFormat.of().formatHex(newDigest().digest(new byte[0]));
     }
 
+    /** 메모리에 있는 내용의 SHA-256 */
+    static String sha256Hex(byte[] data) {
+        return HexFormat.of().formatHex(newDigest().digest(data));
+    }
+
     static String sha256Hex(Path file) throws IOException {
         MessageDigest digest = newDigest();
         try (InputStream in = Files.newInputStream(file)) {
