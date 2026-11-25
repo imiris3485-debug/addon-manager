@@ -39,7 +39,7 @@ import java.util.zip.ZipFile;
  * 달라도 내용이 같으면 같은 값이 나온다. 관리자 앱(frontend/src/lib/library.ts)도 같은 규칙으로 계산해서,
  * 바뀌지 않은 애드온은 다시 올리지 않고 사용자는 설치한 내용과 비교해 업데이트를 판단한다. 규칙을 바꾸면 양쪽을 함께 바꾼다.
  */
-final class AddonZipInspector {
+public final class AddonZipInspector {
 
     static final long MAX_UNCOMPRESSED_BYTES = 500L * 1024 * 1024;
     static final int MAX_ENTRIES = 20_000;
@@ -247,7 +247,7 @@ final class AddonZipInspector {
     }
 
     /** 다른 폴더를 가리키는 이름이므로 경로 문자가 섞이면 안 된다. */
-    static boolean isSafeFolderName(String name) {
+    public static boolean isSafeFolderName(String name) {
         return !name.isEmpty() && name.length() <= MAX_NAME && !name.equals(".") && !name.equals("..")
                 && !FORBIDDEN_CHARS.matcher(name).find() && !name.contains("/") && !name.contains("\\") && !name.contains(",");
     }

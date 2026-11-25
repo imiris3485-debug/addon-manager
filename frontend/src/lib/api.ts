@@ -1,5 +1,5 @@
 import { clearToken, getToken } from './auth'
-import type { AccountStatus, AdminAccount, Environment, LibraryAddon, ReleaseInfo, UploadStart } from './types'
+import type { AccountStatus, AdminAccount, Environment, InstallEvent, LibraryAddon, Person, ReleaseInfo, Setup, SetupInput, SetupList, UploadStart } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -82,6 +82,14 @@ export const api = {
   /** 사용자가 설치할 때 함께 설치할 애드온을 관리자가 지정한다(.toc 에 없는 의존성 보충). 비우면 지정을 지운다. */
   adminSetLibraryRequires: (id: string, requires: string[]) =>
     json<LibraryAddon>(`/admin/library/${id}/requires`, { method: 'PUT', body: JSON.stringify({ requires }) }),
+
+  // 세팅 공유: 만든 사람이 지정한 사람에게만 보인다. 설치 기록은 앱이 설치·삭제한 뒤 알린다.
+  setups: () => json<SetupList>('/setups'),
+  setupPeople: () => json<Person[]>('/setups/people'),
+  createSetup: (input: SetupInput) => json<Setup>('/setups', body(input)),
+  updateSetup: (id: string, input: SetupInput) => json<Setup>(`/setups/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
+  deleteSetup: (id: string) => empty(`/setups/${id}`, { method: 'DELETE' }),
+  recordInstalls: (environmentId: number, events: InstallEvent[]) => empty('/installs/events', body({ environmentId, events })),
 
   // 관리자: 데스크톱 앱 배포(설치 파일은 프록시 크기 제한을 피하려고 조각으로 올린다)
   adminRelease: () => json<ReleaseInfo>('/admin/app-release'),

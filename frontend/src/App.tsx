@@ -9,6 +9,7 @@ import AdminReleasePage from './pages/AdminReleasePage'
 import DownloadPage from './pages/DownloadPage'
 import LibraryPage from './pages/LibraryPage'
 import LoginPage from './pages/LoginPage'
+import SetupsPage from './pages/SetupsPage'
 import SignupPage from './pages/SignupPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -30,9 +31,13 @@ export default function App() {
           // 앱: AddOns 폴더 연결(자동 검색)이 끝난 뒤에만 열린다. 게임 환경은 이때 자동으로 만들어진다.
           <Route element={<FolderGate />}>
             <Route path="library" element={<LibraryPage />} />
+            <Route path="setups" element={<SetupsPage />} />
           </Route>
         ) : (
-          <Route path="library" element={<LibraryPage />} />
+          <>
+            <Route path="library" element={<LibraryPage />} />
+            <Route path="setups" element={<SetupsPage />} />
+          </>
         )}
         <Route path="download" element={<DownloadPage />} />
         <Route path="admin" element={<AdminPage />} />

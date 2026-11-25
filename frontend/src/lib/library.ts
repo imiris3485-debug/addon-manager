@@ -1,10 +1,11 @@
 import { api } from './api'
 import { prepareZip, writePrepared } from './installer'
-import type { LibraryAddon, LocalFolder } from './types'
+import type { InstallEvent, LibraryAddon, LocalFolder } from './types'
 
 // ---------------------------------------------------------------------------------------------
 // 설치한 내용의 기록. 이 앱이 자료실에서 설치할 때 폴더 이름 → 내용 해시를 이 PC(브라우저/앱)에 남겨 두고,
-// 자료실의 해시와 비교해 업데이트를 판단한다. 서버에는 보내지 않는다(사용자별 PC 상태일 뿐이다).
+// 자료실의 해시와 비교해 업데이트를 판단한다. 판단은 이 기록과 PC 폴더로 하고, 서버에는 '무엇을 설치·삭제했는지'만
+// 따로 알려 계정별 현황·이력으로 쌓는다(세팅 공유용. 알리기에 실패해도 설치는 그대로 성공이다).
 // ---------------------------------------------------------------------------------------------
 
 const storageKey = (envId: number) => `addon-manager:installed-hashes:${envId}`
@@ -101,6 +102,16 @@ export function planInstall(item: LibraryAddon, library: LibraryAddon[], install
   return { order, missing }
 }
 
+/** 설치·삭제 결과를 서버에 알린다. 실패해도 PC 의 설치 결과에는 영향이 없으므로 조용히 넘긴다. */
+export async function reportInstalls(envId: number, events: InstallEvent[]): Promise<void> {
+  if (events.length === 0) return
+  try {
+    for (let i = 0; i < events.length; i += 50) await api.recordInstalls(envId, events.slice(i, i + 50))
+  } catch {
+    /* 기록은 안내용이다 */
+  }
+}
+
 export interface InstallOutcome {
   /** 설치한 애드온 이름(필요한 것 포함, 설치 순서) */
   installed: string[]
@@ -122,6 +133,7 @@ export async function installFromLibrary(
   onProgress: (message: string) => void,
 ): Promise<InstallOutcome> {
   const { order, missing } = planInstall(item, library, installedNames)
+  const events: InstallEvent[] = []
   for (const addon of order) {
     onProgress(addon === item ? `설치 중: ${addon.name}` : `필요한 애드온 설치 중: ${addon.name}`)
     const prepared = await prepareZip(await api.downloadLibrary(addon.id))
@@ -133,6 +145,58 @@ export async function installFromLibrary(
     }
     const result = await writePrepared(root, prepared)
     rememberInstalled(envId, addon.name, result.hash)
+    events.push({ addonName: addon.name, action: installedNames.has(addon.name.toLowerCase()) ? 'UPDATED' : 'INSTALLED', contentHash: result.hash })
   }
+  await reportInstalls(envId, events)
   return { installed: order.map((a) => a.name), missing }
+}
+
+// ---------------------------------------------------------------------------------------------
+
+export interface SetupApplyOutcome {
+  /** 설치·업데이트한 애드온(필요한 것 포함) */
+  installed: string[]
+  /** 이미 최신이거나 직접 넣은 폴더라 건드리지 않은 애드온 */
+  skipped: string[]
+  /** 자료실에도 이 PC 에도 없는 필요한 애드온 */
+  missing: string[]
+  /** 설치하다 실패한 애드온과 이유 */
+  failed: { name: string; reason: string }[]
+}
+
+/**
+ * 세팅대로 설치한다. 설치 안 한 것과 업데이트가 있는 것만 설치하고, 이미 최신이거나 직접 넣은 폴더(UNKNOWN)는 건드리지 않는다.
+ * 하나가 실패해도 나머지를 계속하고 결과를 모아서 알린다.
+ */
+export async function applySetup(
+  envId: number,
+  root: FileSystemDirectoryHandle,
+  addonNames: string[],
+  library: LibraryAddon[],
+  local: LocalFolder[],
+  onProgress: (message: string) => void,
+): Promise<SetupApplyOutcome> {
+  const byName = new Map(library.map((a) => [a.name.toLowerCase(), a]))
+  const localByName = new Map(local.map((l) => [l.name.toLowerCase(), l]))
+  const installedNames = new Set(localByName.keys())
+  const hashes = loadInstalledHashes(envId)
+  const out: SetupApplyOutcome = { installed: [], skipped: [], missing: [], failed: [] }
+
+  for (const [i, name] of addonNames.entries()) {
+    const item = byName.get(name.toLowerCase())
+    if (!item) { out.missing.push(name); continue }
+    const state = libraryState(item, localByName.get(item.name.toLowerCase()), hashes)
+    if (state === 'UP_TO_DATE' || state === 'UNKNOWN') { out.skipped.push(item.name); continue }
+    // 앞에서 의존성으로 이미 설치됐을 수 있다
+    if (out.installed.includes(item.name)) continue
+    onProgress(`(${i + 1}/${addonNames.length}) ${item.name}`)
+    try {
+      const result = await installFromLibrary(envId, root, item, library, installedNames, () => undefined)
+      for (const n of result.installed) { out.installed.push(n); installedNames.add(n.toLowerCase()) }
+      for (const m of result.missing) if (!out.missing.includes(m)) out.missing.push(m)
+    } catch (e) {
+      out.failed.push({ name: item.name, reason: (e as Error).message })
+    }
+  }
+  return out
 }

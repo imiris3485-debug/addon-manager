@@ -57,3 +57,46 @@ export interface LocalFolder {
   version: string | null
   requires: string[]
 }
+
+/** 세팅(애드온 묶음). 만든 사람이 지정한 사람에게 공유한다. */
+export interface Setup {
+  /** 외부 식별자(UUID) */
+  id: string
+  name: string
+  description: string | null
+  /** 자료실에 지금 있는 애드온 이름 */
+  addons: string[]
+  /** 세팅에는 있지만 자료실에서 지워져 설치할 수 없는 애드온 */
+  missingAddons: string[]
+  ownerLoginId: string
+  ownerName: string
+  /** 내가 만든 세팅인가 */
+  mine: boolean
+  /** 공유 대상(만든 사람에게만 내려온다) */
+  targets: Person[]
+  updatedAt: string | null
+}
+
+export interface Person {
+  loginId: string
+  name: string
+}
+
+export interface SetupList {
+  mine: Setup[]
+  received: Setup[]
+}
+
+export interface SetupInput {
+  name: string
+  description: string
+  addons: string[]
+  /** 공유할 사람의 로그인 ID */
+  targets: string[]
+}
+
+export interface InstallEvent {
+  addonName: string
+  action: 'INSTALLED' | 'UPDATED' | 'REMOVED'
+  contentHash?: string
+}

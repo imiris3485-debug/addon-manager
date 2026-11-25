@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { useEnv } from '../lib/EnvContext'
 import { formatAgo, formatBytes } from '../lib/format'
 import { removeFolder } from '../lib/installer'
-import { forgetInstalled, installFromLibrary, libraryState, loadInstalledHashes, type LibraryState } from '../lib/library'
+import { forgetInstalled, installFromLibrary, libraryState, loadInstalledHashes, reportInstalls, type LibraryState } from '../lib/library'
 import { isDesktop } from '../lib/nativeFs'
 import { scanFolders } from '../lib/scanner'
 import type { LibraryAddon, LocalFolder } from '../lib/types'
@@ -123,9 +123,30 @@ export default function LibraryPage() {
     try {
       await removeFolder(await folder.requireAccess(), name)
       forgetInstalled(envId, name)
+      await reportInstalls(envId, [{ addonName: name, action: 'REMOVED' }])
       await refetchLocal()
     } catch (e) {
       setNotice((e as Error).message)
+    }
+  }
+
+  /** 자료실에서 설치한 애드온 삭제. 폴더를 지우고 설치 기록·서버 이력에도 반영한다. */
+  const removeInstalled = async (item: LibraryAddon) => {
+    if (envId == null) return
+    if (!confirm(`'${item.name}' 폴더를 삭제할까요?
+다른 애드온이 이 애드온을 필요로 할 수 있습니다.`)) return
+    setNotice(null)
+    setBusy(item.name)
+    try {
+      await removeFolder(await folder.requireAccess(), item.name)
+      forgetInstalled(envId, item.name)
+      await reportInstalls(envId, [{ addonName: item.name, action: 'REMOVED' }])
+      setMessage((m) => ({ ...m, [item.name]: '삭제했습니다' }))
+      await refetchLocal()
+    } catch (e) {
+      setMessage((m) => ({ ...m, [item.name]: `실패: ${(e as Error).message}` }))
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -194,9 +215,14 @@ export default function LibraryPage() {
                   </div>
                 </div>
                 {desktop && (
-                  <button className="btn btn-primary" disabled={busy !== null || !folder.handle || state === 'UP_TO_DATE'} onClick={() => install(item)}>
-                    {state === 'UPDATE_AVAILABLE' ? '업데이트' : state === 'UP_TO_DATE' ? '최신' : state === 'UNKNOWN' ? '자료실 것으로 설치' : '설치'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button className="btn btn-primary" disabled={busy !== null || !folder.handle || state === 'UP_TO_DATE'} onClick={() => install(item)}>
+                      {state === 'UPDATE_AVAILABLE' ? '업데이트' : state === 'UP_TO_DATE' ? '최신' : state === 'UNKNOWN' ? '자료실 것으로 설치' : '설치'}
+                    </button>
+                    {state !== 'NOT_INSTALLED' && (
+                      <button className="btn btn-danger" disabled={busy !== null || !folder.handle} onClick={() => removeInstalled(item)}>삭제</button>
+                    )}
+                  </div>
                 )}
               </div>
               {item.note && <p className="text-xs text-slate-400">메모: {item.note}</p>}
