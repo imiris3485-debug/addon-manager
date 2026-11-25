@@ -110,8 +110,8 @@ export default function SetupsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-bold">세팅 공유</h1>
-        <span className="text-sm text-slate-400">애드온 묶음을 만들어 다른 사람에게 보내고, 받은 세팅은 한 번에 설치합니다.</span>
+        <h1 className="text-2xl font-bold text-indigo-300">우편함</h1>
+        <span className="text-sm text-slate-400">애드온 묶음(세팅)을 편지처럼 보내고, 받은 세팅은 한 번에 설치합니다.</span>
         <div className="ml-auto">
           <button className="btn btn-primary" disabled={editing !== null} onClick={() => startEdit(null)}>새 세팅 만들기</button>
         </div>

@@ -1,27 +1,200 @@
 @import "tailwindcss";
 
+/*
+ * 와우포에버 분위기의 테마: 어두운 나무 바탕 + 가죽 + 금장, 내용은 양피지.
+ * 화면 코드가 slate/indigo 색 이름을 이미 많이 쓰고 있어서, 이름은 그대로 두고 값만 이 테마의 색으로 바꾼다.
+ *  - slate 는 나무·가죽 계열(950 가장 어두움 → 100 밝은 크림)
+ *  - indigo 는 포인트 색: 200~400 은 금색(글자·테두리), 500~700 은 진홍(버튼 바탕)
+ * 글자색 대비는 어두운 바탕 위에서 4.5:1 이상이 되게 골랐다.
+ */
+@theme {
+  --font-sans: "Noto Sans KR", system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-display: "Gowun Batang", "Noto Serif KR", serif;
+  --font-logo: "Cinzel", "Gowun Batang", serif;
+
+  --color-slate-50: #fbf3e1;
+  --color-slate-100: #f3e6c8;
+  --color-slate-200: #e6d4a6;
+  --color-slate-300: #d6c08a;
+  --color-slate-400: #bfa874;
+  --color-slate-500: #a38b5e;
+  --color-slate-600: #7a6440;
+  --color-slate-700: #55401f;
+  --color-slate-800: #3a2814;
+  --color-slate-900: #26180b;
+  --color-slate-950: #170f06;
+
+  --color-indigo-200: #f3dca0;
+  --color-indigo-300: #ebca7a;
+  --color-indigo-400: #e0b955;
+  --color-indigo-500: #b3322a;
+  --color-indigo-600: #8f1d17;
+  --color-indigo-700: #6a1010;
+}
+
 html, body, #root {
   height: 100%;
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
-  font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  @apply text-slate-100 antialiased;
+  font-family: var(--font-sans);
+  /* 어두운 나무결 + 가장자리를 눌러 주는 그림자 */
+  background-color: #1a1008;
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(120, 70, 20, 0.22), transparent 60%),
+    repeating-linear-gradient(90deg, #26180b 0px, #2e1d0d 3px, #26180b 7px, #1f1409 12px);
+  background-attachment: fixed;
 }
 
-/* 공통 컴포넌트 스타일 */
-.btn {
-  @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50;
+h1, h2, h3 {
+  font-family: var(--font-display);
 }
+
+/* ------------------------------------------------------------------ 공통 컴포넌트 */
+.btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium text-slate-100 transition disabled:cursor-not-allowed disabled:opacity-50;
+  border: 1px solid #7a5d27;
+  background: linear-gradient(#3a2814, #2b1d0e);
+}
+.btn:hover:not(:disabled) {
+  background: linear-gradient(#4a3419, #36250f);
+  border-color: #a8843f;
+}
+/* 주 행동: 진홍 바탕 + 금테 (와우 버튼) */
 .btn-primary {
-  @apply bg-indigo-600 hover:bg-indigo-500;
+  border-color: #d9b25a;
+  background: linear-gradient(#a52a22, #6a1010);
+  color: #fff0cf;
+  box-shadow: inset 0 1px 0 rgba(255, 220, 160, 0.4);
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(#b8352c, #7a1414);
+  border-color: #ebca7a;
 }
 .btn-danger {
-  @apply bg-rose-700 hover:bg-rose-600;
+  border-color: #8a3a2a;
+  background: linear-gradient(#5e1d16, #3e0f0b);
+  color: #ffd9c9;
+}
+.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(#7a251c, #4e130e);
+  border-color: #c25a44;
 }
 .input {
-  @apply w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500;
+  @apply w-full rounded px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none;
+  border: 1px solid #55401f;
+  background: #170f06;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+.input:focus {
+  border-color: #d9b25a;
 }
 .card {
-  @apply rounded-lg border border-slate-800 bg-slate-900/60 p-4;
+  @apply rounded-lg p-4;
+  border: 1px solid #55401f;
+  background: linear-gradient(rgba(58, 40, 20, 0.75), rgba(38, 24, 11, 0.75));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+/* ------------------------------------------------------------------ 양피지 책 (자료실) */
+.book {
+  display: flex;
+  min-height: 0;
+  border-radius: 8px;
+  border: 3px solid #4a300f;
+  background: #d8c18b;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.6), inset 0 0 0 2px #b8913e;
+}
+.page-left {
+  background: radial-gradient(ellipse at 50% 0%, #f1e2ba, #e2cf9f 75%);
+  border-radius: 5px 0 0 5px;
+  box-shadow: inset -14px 0 22px -10px rgba(90, 55, 15, 0.5);
+}
+.page-right {
+  background: radial-gradient(ellipse at 60% 0%, #f6eacb, #e8d6a8 80%);
+  border-radius: 0 5px 5px 0;
+}
+@media (max-width: 767px) {
+  .book { flex-direction: column; }
+  .page-left { border-radius: 5px 5px 0 0; box-shadow: none; }
+  .page-right { border-radius: 0 0 5px 5px; }
+}
+/* 양피지 위의 글자색 */
+.ink { color: #3b2412; }
+.ink-soft { color: #6b5231; }
+.ink-red { color: #7a1a12; }
+.parch-input {
+  @apply w-full rounded px-3 py-2 text-sm outline-none;
+  color: #3b2412;
+  border: 1px solid #a8843f;
+  background: rgba(75, 45, 15, 0.12);
+  box-shadow: inset 0 2px 5px rgba(75, 45, 15, 0.3);
+}
+.parch-input::placeholder { color: #6b5231; }
+.parch-input:focus { border-color: #7a1a12; }
+/* 양피지 위의 보조 버튼 */
+.btn-parch {
+  @apply inline-flex items-center justify-center rounded px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  color: #6a1010;
+  border: 1px solid #8a6a2c;
+  background: transparent;
+}
+.btn-parch:hover:not(:disabled) { background: rgba(138, 106, 44, 0.18); }
+
+/* 의뢰 목록의 한 줄 */
+.quest-row {
+  @apply flex w-full items-center gap-3 rounded px-3 py-2.5 text-left transition;
+  border: 1px solid transparent;
+}
+.quest-row:hover { background: rgba(184, 145, 62, 0.16); }
+.quest-row[aria-current="true"] {
+  background: linear-gradient(90deg, rgba(184, 145, 62, 0.38), rgba(184, 145, 62, 0.1));
+  border-color: #b8913e;
+}
+/* 와우 의뢰 표시: 노란 느낌표/물음표, 회색 체크 */
+.quest-mark {
+  width: 26px;
+  text-align: center;
+  font-family: var(--font-logo);
+  font-weight: 700;
+  font-size: 28px;
+  line-height: 1;
+}
+.quest-mark.gold { color: #d4a000; text-shadow: 0 0 10px rgba(255, 200, 40, 0.7); }
+.quest-mark.grey { color: #6b5231; }
+
+/* 아이템 아이콘 칸(품질 색 테두리) */
+.item-icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border-style: solid;
+  background: radial-gradient(circle at 35% 30%, #4b3319, #1f140a);
+  font-family: var(--font-logo);
+  font-weight: 700;
+  color: #e6c068;
+}
+
+/* 장식 구분선 */
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #8a6a2c);
+}
+.divider::after { transform: scaleX(-1); }
+.divider > i {
+  width: 8px;
+  height: 8px;
+  background: #8a6a2c;
+  transform: rotate(45deg);
 }

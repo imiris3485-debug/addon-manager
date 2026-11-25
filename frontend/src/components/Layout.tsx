@@ -7,8 +7,8 @@ import { useEffect, useState } from 'react'
 import { checkAppUpdate, getAppVersion, installAppUpdate, isDesktop } from '../lib/nativeFs'
 
 const navCls = ({ isActive }: { isActive: boolean }) =>
-  `rounded-md px-3 py-1.5 text-sm font-medium transition ${
-    isActive ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
+  `rounded-t px-4 py-2 text-sm font-medium transition ${
+    isActive ? 'bg-[#e9d8b0] font-bold text-[#3b2412] shadow-[inset_0_2px_0_#fff3cf]' : 'text-slate-300 hover:text-white'
   }`
 
 /** 앱 버전과 업데이트 확인(앱에서만). 옛 앱은 버전 조회가 없어서 그 사실을 알려 준다. */
@@ -62,14 +62,17 @@ function Header() {
   const onChangeFolder = () => changeFolder().catch((e) => alert((e as Error).message))
 
   return (
-    <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-        <span className="mr-2 text-lg font-bold text-indigo-400">Addon Manager</span>
+    <header className="border-b-2 border-[#9a7430] bg-gradient-to-b from-[#241709] to-[#170f06] shadow-[0_4px_14px_rgba(0,0,0,0.5)]">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-end gap-3 px-4 pt-3">
+        <span className="mb-2 mr-3 flex items-center gap-2 font-[family-name:var(--font-logo)] text-lg font-bold uppercase tracking-[0.15em] text-indigo-400 [text-shadow:0_1px_0_#000,0_0_12px_rgba(230,192,104,0.35)]">
+          <svg width="22" height="24" viewBox="0 0 28 30" aria-hidden="true"><path d="M14 2 L25 8 V16 C25 22 20 26 14 28 C8 26 3 22 3 16 V8 Z" fill="none" stroke="#e6c068" strokeWidth="2" /><path d="M14 8 L18 14 L14 20 L10 14 Z" fill="#e6c068" /></svg>
+          Addon Manager
+        </span>
         <nav className="flex flex-wrap gap-1">
           {(!desktop || ready) && <NavLink to="/library" className={navCls}>자료실</NavLink>}
           {(!desktop || ready) && (
             <NavLink to="/setups" className={navCls}>
-              세팅 공유{receivedCount > 0 && <span className="ml-1.5 rounded-full bg-indigo-500 px-1.5 py-0.5 text-xs text-white">{receivedCount}</span>}
+              우편함{receivedCount > 0 && <span className="ml-1.5 rounded-full bg-[#8a1c1c] px-1.5 py-0.5 text-xs font-bold text-[#ffe9bf]">{receivedCount}</span>}
             </NavLink>
           )}
           {!desktop && <NavLink to="/download" className={navCls}>앱 다운로드</NavLink>}
@@ -77,7 +80,7 @@ function Header() {
           {isAdmin && <NavLink to="/admin/release" className={navCls}>앱 배포</NavLink>}
           {isAdmin && <NavLink to="/admin" end className={navCls}>계정 승인</NavLink>}
         </nav>
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-3 pb-2">
           {desktop && current && (
             <>
               <span className="text-sm text-slate-400">게임 버전 {current.gameVersion}</span>
