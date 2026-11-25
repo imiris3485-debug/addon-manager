@@ -5,7 +5,7 @@ import { StatusBadge } from '../components/StatusBadge'
 import { curseforgeInstallUrl, curseforgeLinkAttrs } from '../lib/curseforgeLink'
 import { useEnv } from '../lib/EnvContext'
 import { hasPermission } from '../lib/handles'
-import { describeDependencies, installWithDependencies, removeAddon } from '../lib/installer'
+import { describeDependencies, installWithDependencies, removeAddon, removeUnmanagedFolder } from '../lib/installer'
 import { scanEnvironment } from '../lib/scanner'
 import type { InstalledAddon, ScanResponse } from '../lib/types'
 import { useFolder } from '../lib/useFolder'
@@ -132,6 +132,20 @@ export default function InstalledPage() {
     }
   }
 
+  /** 연결되지 않은 폴더 삭제. 설치 기록이 없어 폴더만 지우고 목록에서 뺀다. */
+  const onRemoveUnmanaged = async (folderName: string) => {
+    if (envId == null) return
+    if (!confirm(`'${folderName}' 폴더를 삭제할까요?\nCurseForge 와 연결되지 않은 폴더라 되돌릴 수 없고, 다른 애드온이 이 폴더를 쓰고 있을 수 있습니다.`)) return
+    setError(null)
+    try {
+      const root = await folder.requireAccess()
+      await removeUnmanagedFolder(envId, root, folderName)
+      setResult((prev) => ({ ...prev, unmatchedFolders: prev.unmatchedFolders.filter((x) => x !== folderName) }))
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
   // 환경과 폴더 연결은 FolderGate 가 보장한다. 핸들을 읽어 오는 짧은 순간만 대기 표시를 한다.
   if (!current || folder.loading || !folder.handle) return <p className="text-slate-400">불러오는 중...</p>
 
@@ -216,9 +230,17 @@ export default function InstalledPage() {
                 CurseForge 와 연결되지 않은 폴더 {result.unmatchedFolders.length}개
               </summary>
               <p className="mt-2 text-xs text-slate-500">
-                다른 경로로 설치했거나 라이브러리 폴더일 수 있습니다. 관리 대상에서 제외됩니다.
+                다른 경로로 설치했거나 라이브러리 폴더일 수 있습니다. 업데이트 관리 대상에서 제외됩니다.
+                다른 애드온이 쓰는 폴더일 수 있으니 무엇인지 확인한 뒤 삭제하세요.
               </p>
-              <p className="mt-2 text-xs text-slate-400">{result.unmatchedFolders.join(', ')}</p>
+              <ul className="mt-2 space-y-1">
+                {result.unmatchedFolders.map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-xs text-slate-300">
+                    <span className="min-w-0 flex-1 truncate">{f}</span>
+                    <button className="btn btn-danger !px-2 !py-0.5" disabled={busy} onClick={() => onRemoveUnmanaged(f)}>삭제</button>
+                  </li>
+                ))}
+              </ul>
             </details>
           )}
         </>

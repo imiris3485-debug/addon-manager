@@ -178,6 +178,16 @@ export function describeDependencies(outcome: DependencyOutcome): string[] {
   return lines
 }
 
+/**
+ * CurseForge 와 연결되지 않은 폴더(남은 라이브러리, 다른 경로로 설치한 것 등)를 지운다.
+ * 연결된 애드온과 달리 서버의 설치 기록이 없으므로 폴더만 지운다. 이름은 스캔이 알려 준 AddOns 안의 폴더뿐이고,
+ * 실제 삭제 범위는 앱(main)이 AddOns 폴더 안으로 다시 제한한다.
+ */
+export async function removeUnmanagedFolder(envId: number, root: FileSystemDirectoryHandle, folder: string) {
+  invalidateFingerprints(envId, [folder])
+  await removeFolder(root, folder)
+}
+
 export async function removeAddon(
   envId: number,
   root: FileSystemDirectoryHandle,
