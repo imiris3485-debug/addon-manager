@@ -4,11 +4,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.resource.PathResourceResolver;
 
 import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 프론트(React SPA) 정적 파일 서빙. 파일이 없는 경로(예: /installed 새로고침)는 index.html 로 돌려
@@ -31,8 +33,16 @@ public class SpaWebConfig implements WebMvcConfigurer {
             registry.addResourceHandler("/downloads/**")
                     .addResourceLocations("file:" + (downloadsDir.endsWith("/") ? downloadsDir : downloadsDir + "/"));
         }
+        // 빌드 결과(/assets/**)는 파일 이름에 내용 해시가 붙어 있어 내용이 바뀌면 이름도 바뀐다 → 오래 캐시해도 안전하다.
+        // 이 핸들러가 먼저 와야 아래 SPA 대체(index.html) 해석기가 없는 assets 파일을 200 으로 가리지 않는다.
+        registry.addResourceHandler("/assets/**")
+                .addResourceLocations("classpath:/static/assets/")
+                .setCacheControl(CacheControl.maxAge(365, TimeUnit.DAYS).cachePublic().immutable());
         registry.addResourceHandler("/**")
                 .addResourceLocations("classpath:/static/")
+                // index.html 은 이름이 늘 같다. 캐시 지시가 없으면 브라우저·앱이 마지막 수정 시각으로 짐작해 옛 index.html 을
+                // 한동안 재사용해서, 서버를 다시 배포해도 옛 화면이 뜬다. 매번 서버에 확인(304)하게 한다.
+                .setCacheControl(CacheControl.noCache())
                 .resourceChain(true)
                 .addResolver(new PathResourceResolver() {
                     @Override

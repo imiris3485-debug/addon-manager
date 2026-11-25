@@ -93,10 +93,46 @@ function Header() {
   )
 }
 
+/**
+ * 서버에 새 화면이 배포됐는지 가끔 확인한다. 앱(과 켜 둔 브라우저)은 처음 받은 화면을 계속 쓰므로 알려 주지 않으면
+ * 배포한 뒤에도 옛 화면이 남는다. 지금 실행 중인 번들 이름과 서버의 index.html 이 가리키는 번들 이름을 비교한다.
+ */
+function useNewVersion(): boolean {
+  const [stale, setStale] = useState(false)
+  useEffect(() => {
+    const running = document.querySelector('script[type="module"][src*="/assets/"]')?.getAttribute('src')
+    if (!running) return          // 개발 서버(vite)에서는 번들 이름이 없어 확인하지 않는다
+    const check = async () => {
+      try {
+        const res = await fetch('/index.html', { cache: 'no-store' })
+        if (!res.ok) return
+        const latest = /<script[^>]+type="module"[^>]+src="([^"]*\/assets\/[^"]+)"/.exec(await res.text())?.[1]
+        if (latest && latest !== running) setStale(true)
+      } catch {
+        /* 네트워크 오류는 다음 확인 때 다시 본다 */
+      }
+    }
+    const timer = setInterval(check, 5 * 60 * 1000)
+    window.addEventListener('focus', check)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', check)
+    }
+  }, [])
+  return stale
+}
+
 export default function Layout() {
+  const stale = useNewVersion()
   return (
     <EnvProvider>
       <div className="min-h-full">
+        {stale && (
+          <div className="flex flex-wrap items-center justify-center gap-3 bg-indigo-600 px-4 py-2 text-sm text-white">
+            새 버전의 화면이 배포되었습니다.
+            <button className="btn !bg-white !px-2 !py-0.5 text-xs !text-indigo-700" onClick={() => window.location.reload()}>지금 새로고침</button>
+          </div>
+        )}
         <Header />
         <main className="mx-auto max-w-6xl px-4 py-6">
           <Outlet />
