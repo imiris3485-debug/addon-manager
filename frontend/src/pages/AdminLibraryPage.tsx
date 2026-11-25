@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { formatAgo, formatBytes } from '../lib/format'
-import { applyDeps, buildSyncPlan, uploadFolder, type SyncPlan, type SyncRow } from '../lib/librarySync'
+import { applyDeps, buildSyncPlan, childrenOf, uploadFolder, type SyncPlan, type SyncRow } from '../lib/librarySync'
 import { getLibraryFolder, isDesktop, pickLibraryFolder } from '../lib/nativeFs'
 import type { LibraryAddon } from '../lib/types'
 
@@ -132,7 +132,7 @@ export default function AdminLibraryPage() {
     } else {
       next.add(row.name)
       const pending = new Set((plan?.rows ?? []).filter((r) => r.kind !== 'SAME').map((r) => r.name.toLowerCase()))
-      for (const d of row.deps) {
+      for (const d of childrenOf(row, plan?.rows ?? [])) {
         const found = plan?.rows.find((r) => r.name.toLowerCase() === d.toLowerCase())
         if (found && pending.has(found.name.toLowerCase())) next.add(found.name)
       }
@@ -184,13 +184,13 @@ export default function AdminLibraryPage() {
                 새로 추가 <b>{counts.add}</b> · 내용 바뀜 <b>{counts.changed}</b> · 함께 설치 정보 갱신 <b>{counts.deps}</b> · 같음 {counts.same} · 원본에서 사라짐 <b>{plan.removed.length}</b>
               </p>
               <ul className="max-h-96 space-y-1 overflow-auto">
-                {groupRows(plan.rows.filter((r) => r.kind !== 'SAME')).map(({ row: r, child }) => (
+                {groupRows(plan.rows.filter((r) => r.kind !== 'SAME'), plan.rows).map(({ row: r, child }) => (
                   <li key={r.name} className={`flex items-center gap-2 text-sm ${child ? 'ml-6' : ''}`}>
                     <input type="checkbox" checked={upload.has(r.name)} disabled={busy} onChange={() => toggleRow(r)} />
                     <span className="min-w-0 flex-1 truncate">
                       {child && <span className="text-slate-600">└ </span>}
                       {r.name}{r.version && <span className="text-xs text-slate-500"> v{r.version}</span>}
-                      {!child && r.deps.length > 0 && <span className="text-xs text-indigo-300"> · 함께 설치: {r.deps.join(', ')}</span>}
+                      {!child && childrenOf(r, plan.rows).length > 0 && <span className="text-xs text-indigo-300"> · 함께 설치: {childrenOf(r, plan.rows).join(', ')}</span>}
                     </span>
                     <span className={`rounded px-1.5 py-0.5 text-xs ${r.kind === 'NEW' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>{KIND_LABEL[r.kind]}</span>
                   </li>
@@ -236,7 +236,7 @@ export default function AdminLibraryPage() {
  * 함께 설치될 애드온을 그것을 필요로 하는 애드온 바로 아래에 들여써서 묶어 보여 준다.
  * 어느 애드온의 의존성으로도 쓰이지 않는 것(또는 필요로 하는 쪽이 목록에 없는 것)은 맨 위 항목으로 둔다.
  */
-function groupRows(rows: SyncRow[]): { row: SyncRow; child: boolean }[] {
+function groupRows(rows: SyncRow[], all: SyncRow[]): { row: SyncRow; child: boolean }[] {
   const byName = new Map(rows.map((r) => [r.name.toLowerCase(), r]))
   const placed = new Set<string>()
   const out: { row: SyncRow; child: boolean }[] = []
@@ -245,7 +245,7 @@ function groupRows(rows: SyncRow[]): { row: SyncRow; child: boolean }[] {
     if (placed.has(r.name.toLowerCase())) continue
     placed.add(r.name.toLowerCase())
     out.push({ row: r, child: false })
-    for (const d of r.deps) {
+    for (const d of childrenOf(r, all)) {
       const dep = byName.get(d.toLowerCase())
       if (dep && !placed.has(dep.name.toLowerCase())) {
         placed.add(dep.name.toLowerCase())

@@ -106,6 +106,13 @@ export async function buildSyncPlan(
   return { rows, removed: server.filter((s) => !present.has(s.name.toLowerCase())) }
 }
 
+/** 이 행 아래에 묶을 행의 이름: 필수·선택 의존성 + 이름이 `이름_` 로 시작하는 모듈(같은 묶음에 딸린 폴더). */
+export function childrenOf(row: SyncRow, rows: SyncRow[]): string[] {
+  const prefix = row.name.toLowerCase() + '_'
+  const modules = rows.filter((r) => r.name.toLowerCase().startsWith(prefix)).map((r) => r.name)
+  return [...new Set([...row.deps, ...modules])]
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const mb = (n: number) => (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)
 

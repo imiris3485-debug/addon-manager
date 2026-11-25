@@ -1,5 +1,6 @@
 import { clearToken, getToken } from './auth'
 import type { ManifestFile } from './installer'
+import { withModules } from './modules'
 import type { AccountStatus, AdminAccount, Environment, InstallEvent, LibraryAddon, Person, ReleaseInfo, Setup, SetupInput, SetupList, Snapshot, UploadStart } from './types'
 
 export class ApiError extends Error {
@@ -69,7 +70,7 @@ export const api = {
   deleteEnvironment: (id: number) => empty(`/environments/${id}`, { method: 'DELETE' }),
 
   // 자료실: 관리자가 올린 애드온 폴더. 목록·받기는 로그인한 사용자, 올리기·지우기는 관리자
-  library: () => json<LibraryAddon[]>('/library'),
+  library: async () => withModules(await json<Omit<LibraryAddon, 'modules'>[]>('/library')),
   /** 애드온의 파일 목록(경로·크기·SHA-256). 받는 쪽이 파일별로 내려받아 해시로 검증한다. */
   libraryManifest: (id: string) => json<ManifestFile[]>(`/library/${id}/manifest`),
   /**

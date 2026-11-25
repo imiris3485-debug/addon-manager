@@ -1,5 +1,6 @@
 import { api } from './api'
 import { installAddonFiles } from './installer'
+import { needs } from './modules'
 import type { InstallEvent, LibraryAddon, LocalFolder } from './types'
 
 // ---------------------------------------------------------------------------------------------
@@ -90,7 +91,7 @@ export function planInstall(item: LibraryAddon, library: LibraryAddon[], satisfi
     if (visited.has(key)) return
     visited.add(key)
     if (depth < MAX_DEPTH) {
-      for (const dep of a.requires) {
+      for (const dep of needs(a)) {
         const depKey = dep.toLowerCase()
         if (satisfiedNames.has(depKey)) continue
         const found = byName.get(depKey)

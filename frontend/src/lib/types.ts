@@ -45,6 +45,11 @@ export interface LibraryAddon {
   requires: string[]
   /** 이 중 관리자가 따로 지정한 것(.toc 에 선언되지 않은 의존성 보충) */
   extraRequires: string[]
+  /**
+   * 같은 묶음에 딸린 모듈 폴더(이름이 `이름_` 으로 시작하는 자료실 애드온. 예: Details → Details_Compare2).
+   * 서버가 주는 값이 아니라 자료실 목록에서 클라이언트가 계산한다(withModules).
+   */
+  modules: string[]
   fileSize: number
   /** 관리자 메모 */
   note: string | null
