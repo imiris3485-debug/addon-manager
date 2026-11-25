@@ -8,6 +8,8 @@ const call = (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel
 contextBridge.exposeInMainWorld('addonFs', {
   detect: () => call('fs:detect'),
   pick: () => call('fs:pick'),
+  pickLibrary: () => call('fs:pickLibrary'),
+  libraryInfo: () => call('fs:libraryInfo'),
   bind: (key: string, envId: number) => call('fs:bind', key, envId),
   exists: (key: string) => call('fs:exists', key),
   list: (key: string, rel: string[]) => call('fs:list', key, rel),

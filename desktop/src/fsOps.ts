@@ -10,6 +10,8 @@ export interface FsEntry {
 export interface FsOpsOptions {
   /** 한 번에 읽고 쓸 수 있는 파일 크기 상한(바이트) */
   maxFileBytes?: number
+  /** true 인 키는 읽기만 허용한다(자료실 원본 폴더). 쓰기·폴더 만들기·삭제는 거부한다. */
+  isReadOnly?: (key: string) => boolean
 }
 
 const DEFAULT_MAX_FILE_BYTES = 300 * 1024 * 1024
@@ -35,12 +37,21 @@ export function toFsError(e: unknown): FsError {
  */
 export class FsOps {
   private readonly maxFileBytes: number
+  private readonly isReadOnly: (key: string) => boolean
 
   constructor(
     private readonly rootOf: (key: string) => string | null,
     options: FsOpsOptions = {},
   ) {
     this.maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
+    this.isReadOnly = options.isReadOnly ?? (() => false)
+  }
+
+  /** 읽기 전용 폴더(자료실 원본)에는 무엇도 쓰거나 지우지 못한다. 원본이 앱 때문에 바뀌면 안 된다. */
+  private requireWritable(key: unknown): void {
+    if (typeof key === 'string' && this.isReadOnly(key)) {
+      throw new FsError('Invalid', '읽기 전용 폴더입니다. 이 폴더는 바꿀 수 없습니다.')
+    }
   }
 
   private async locate(key: unknown, rel: unknown) {
@@ -115,6 +126,7 @@ export class FsOps {
   }
 
   async write(key: unknown, rel: unknown, data: unknown): Promise<void> {
+    this.requireWritable(key)
     const { segs, full } = await this.locate(key, rel)
     if (segs.length === 0) throw new FsError('Invalid', '파일 이름이 필요합니다.')
     if (!(data instanceof Uint8Array)) throw new FsError('Invalid', '잘못된 데이터입니다.')
@@ -126,11 +138,13 @@ export class FsOps {
   }
 
   async mkdir(key: unknown, rel: unknown): Promise<void> {
+    this.requireWritable(key)
     const { full } = await this.locate(key, rel)
     await fs.promises.mkdir(full, { recursive: true })
   }
 
   async remove(key: unknown, rel: unknown, recursive: unknown): Promise<void> {
+    this.requireWritable(key)
     const { segs, full } = await this.locate(key, rel)
     // 기준 폴더(AddOns) 자체를 지우면 설치된 애드온이 전부 사라진다
     if (segs.length === 0) throw new FsError('Invalid', 'AddOns 폴더 자체는 삭제할 수 없습니다.')

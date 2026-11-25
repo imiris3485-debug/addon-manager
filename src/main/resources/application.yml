@@ -41,10 +41,8 @@ app:
   jwt:
     access-secret: ${JWT_ACCESS_SECRET}   # 32바이트 이상(HS256). 짧으면 기동 실패
     access-valid-seconds: ${JWT_ACCESS_VALID_SECONDS:3600}
-  curseforge:
-    api-key: ${CURSEFORGE_API_KEY:}       # 서버에만 둔다. 비어 있으면 CurseForge 호출 시 오류
-    base-url: https://api.curseforge.com
   downloads-dir: ${DOWNLOADS_DIR:}        # 데스크톱 앱 설치 파일 폴더(/downloads/** 로 서빙). 비우면 비활성
+  library-dir: ${LIBRARY_DIR:}            # 애드온 자료실 zip 폴더. 공개 경로로 서빙하지 않는다(로그인 필요). 비우면 비활성
   admin:                                  # 최초 관리자 계정. 값이 비어 있으면 생성하지 않는다
     login-id: ${ADMIN_LOGIN_ID:}
     password: ${ADMIN_PASSWORD:}

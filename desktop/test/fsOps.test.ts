@@ -116,3 +116,49 @@ describe('크기 제한과 잘못된 입력', () => {
     await rejectsGuard(ops.write(KEY, ['Dir'], bytes('x')))
   })
 })
+
+describe('읽기 전용 폴더(자료실 원본)', () => {
+  const LIB = 'library'
+  let libRoot: string
+  let libOps: FsOps
+
+  before(() => {
+    // 자료실 원본은 Interface\AddOns 형태가 아닌 임의의 폴더이고, 관리자가 읽기만 한다
+    libRoot = path.join(tmp, 'my-library')
+    fs.mkdirSync(path.join(libRoot, 'Details', 'Libs'), { recursive: true })
+    fs.writeFileSync(path.join(libRoot, 'Details', 'Details.toc'), '## Version: 1\n')
+    fs.writeFileSync(path.join(libRoot, 'Details', 'Libs', 'a.lua'), 'x')
+    libOps = new FsOps((key) => (key === LIB ? libRoot : null), { isReadOnly: (key) => key === LIB })
+  })
+
+  it('목록·상태·읽기는 된다', async () => {
+    assert.deepEqual((await libOps.list(LIB, [])).map((e) => e.name), ['Details'])
+    assert.equal(await libOps.stat(LIB, ['Details']), 'directory')
+    assert.equal(new TextDecoder().decode(await libOps.read(LIB, ['Details', 'Details.toc'])), '## Version: 1\n')
+  })
+
+  it('쓰기·폴더 만들기·삭제는 거부하고 원본은 그대로다', async () => {
+    await rejectsGuard(libOps.write(LIB, ['Details', 'evil.lua'], bytes('x')))
+    await rejectsGuard(libOps.mkdir(LIB, ['NewFolder']))
+    await rejectsGuard(libOps.remove(LIB, ['Details'], true))
+    await rejectsGuard(libOps.remove(LIB, ['Details', 'Details.toc'], false))
+    assert.ok(fs.existsSync(path.join(libRoot, 'Details', 'Details.toc')))
+    assert.equal(fs.existsSync(path.join(libRoot, 'Details', 'evil.lua')), false)
+    assert.equal(fs.existsSync(path.join(libRoot, 'NewFolder')), false)
+  })
+
+  it('폴더 밖과 링크 우회 방어는 이 폴더에도 적용된다', async () => {
+    await rejectsGuard(libOps.read(LIB, ['..', 'outside', 'secret.txt']))
+    const link = path.join(libRoot, 'Linked')
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+    await rejectsGuard(libOps.read(LIB, ['Linked', 'secret.txt']))
+    assert.ok(!(await libOps.list(LIB, [])).some((e) => e.name === 'Linked'))
+  })
+
+  it('같은 FsOps 라도 읽기 전용이 아닌 키는 쓸 수 있다', async () => {
+    const mixed = new FsOps((key) => (key === LIB ? libRoot : key === KEY ? addons : null), { isReadOnly: (key) => key === LIB })
+    await mixed.write(KEY, ['Writable', 'a.lua'], bytes('ok'))
+    assert.equal(fs.readFileSync(path.join(addons, 'Writable', 'a.lua'), 'utf8'), 'ok')
+    await mixed.remove(KEY, ['Writable'], true)
+  })
+})

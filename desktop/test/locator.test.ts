@@ -128,3 +128,52 @@ describe('RootStore', () => {
     assert.ok(store.rootOf('2'))
   })
 })
+
+describe('RootStore 자료실 원본 폴더', () => {
+  it('읽기 전용으로 연결하고 저장한다', () => {
+    const file = path.join(tmp, 'lib1.json')
+    const store = new RootStore(file)
+    const lib = mk('library-src')
+
+    store.setLibrary(lib)
+
+    assert.equal(store.getLibrary(), lib)
+    assert.equal(store.rootOf('library'), lib)
+    assert.equal(store.isReadOnly('library'), true)
+    assert.equal(new RootStore(file).getLibrary(), lib)            // 다시 켜도 기억한다
+  })
+
+  it('AddOns 연결과 함께 저장해도 서로 영향을 주지 않는다', () => {
+    const file = path.join(tmp, 'lib2.json')
+    const store = new RootStore(file)
+    store.setLibrary(mk('library-src2'))
+    const key = store.addPending(mk('k', 'Interface', 'AddOns'))
+    store.bind(key, 5)
+
+    const reloaded = new RootStore(file)
+    assert.ok(reloaded.getLibrary())
+    assert.ok(reloaded.rootOf('5'))
+    assert.equal(reloaded.isReadOnly('5'), false)                  // AddOns 연결은 쓸 수 있다
+  })
+
+  it('드라이브 전체나 상대 경로는 자료실로 쓸 수 없다', () => {
+    const store = new RootStore(path.join(tmp, 'lib3.json'))
+    assert.throws(() => store.setLibrary(path.parse(tmp).root))
+    assert.throws(() => store.setLibrary('relative/dir'))
+    assert.equal(store.getLibrary(), null)
+  })
+
+  it('저장 파일이 변조되어 상대 경로나 드라이브 전체가 들어 있으면 무시한다', () => {
+    const file = path.join(tmp, 'lib4.json')
+    fs.writeFileSync(file, JSON.stringify({ library: 'relative/x' }))
+    assert.equal(new RootStore(file).getLibrary(), null)
+    fs.writeFileSync(file, JSON.stringify({ library: path.parse(tmp).root }))
+    assert.equal(new RootStore(file).getLibrary(), null)
+  })
+
+  it('자료실 키는 화면이 만들어 낸 대기 키와 구분된다', () => {
+    const store = new RootStore(path.join(tmp, 'lib5.json'))
+    assert.equal(store.rootOf('library'), null)                    // 아직 연결 전
+    assert.equal(store.isReadOnly('p-00000000-0000-0000-0000-000000000000'), false)
+  })
+})

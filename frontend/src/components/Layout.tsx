@@ -22,11 +22,11 @@ function Header() {
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
         <span className="mr-2 text-lg font-bold text-indigo-400">Addon Manager</span>
         <nav className="flex flex-wrap gap-1">
-          {desktop && ready && <NavLink to="/installed" className={navCls}>설치된 애드온</NavLink>}
-          {(!desktop || ready) && <NavLink to="/search" className={navCls}>검색</NavLink>}
+          {(!desktop || ready) && <NavLink to="/library" className={navCls}>자료실</NavLink>}
           {!desktop && <NavLink to="/download" className={navCls}>앱 다운로드</NavLink>}
-          {isAdmin && <NavLink to="/admin" end className={navCls}>계정 승인</NavLink>}
+          {isAdmin && <NavLink to="/admin/library" className={navCls}>자료실 관리</NavLink>}
           {isAdmin && <NavLink to="/admin/release" className={navCls}>앱 배포</NavLink>}
+          {isAdmin && <NavLink to="/admin" end className={navCls}>계정 승인</NavLink>}
         </nav>
         <div className="ml-auto flex items-center gap-3">
           {desktop && current && (

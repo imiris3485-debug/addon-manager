@@ -1,8 +1,5 @@
 import { clearToken, getToken } from './auth'
-import type {
-  AccountStatus, AddonDetail, AddonFile, AdminAccount, CategoryInfo, DependencyInfo, Environment, GameVersionGroup, InstallReport, ReleaseInfo, ScanEntry, ScanResponse,
-  SearchResponse, SearchSort, UploadStart,
-} from './types'
+import type { AccountStatus, AdminAccount, Environment, LibraryAddon, ReleaseInfo, UploadStart } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -62,7 +59,7 @@ export const api = {
   signup: (loginId: string, password: string, name: string) =>
     empty('/auth/signup', body({ loginId, password, name })),
 
-  // 게임 환경
+  // 게임 환경(이 PC 의 AddOns 폴더 연결에 붙는 이름표)
   environments: () => json<Environment[]>('/environments'),
   createEnvironment: (name: string, gameVersion: string) =>
     json<Environment>('/environments', body({ name, gameVersion })),
@@ -70,35 +67,21 @@ export const api = {
     empty(`/environments/${id}`, { method: 'PUT', body: JSON.stringify({ name, gameVersion }) }),
   deleteEnvironment: (id: number) => empty(`/environments/${id}`, { method: 'DELETE' }),
 
-  // 애드온
-  gameVersions: () => json<GameVersionGroup[]>('/addons/game-versions'),
-  scan: (environmentId: number, entries: ScanEntry[]) =>
-    json<ScanResponse>(`/environments/${environmentId}/scan`, body({ entries })),
-  reportInstalled: (environmentId: number, report: InstallReport) =>
-    empty(`/environments/${environmentId}/installed`, body(report)),
-  /** 이 환경에 설치된 것으로 기록된 프로젝트 ID(검색 화면의 "설치됨" 표시용) */
-  installedProjectIds: (environmentId: number) => json<number[]>(`/environments/${environmentId}/installed`),
-  /** 파일이 필요로 하는 다른 애드온(필수 의존성, 의존성의 의존성 포함). 가까운 것부터 온다. */
-  dependencies: (environmentId: number, projectId: number, fileId: number) =>
-    json<DependencyInfo[]>(`/addons/${projectId}/files/${fileId}/dependencies?environmentId=${environmentId}`),
-  removeInstalled: (environmentId: number, projectId: number) =>
-    empty(`/environments/${environmentId}/installed/${projectId}`, { method: 'DELETE' }),
-  search: (environmentId: number, q: string, page: number, sort: SearchSort = 'POPULARITY', categoryId?: number | null) =>
-    json<SearchResponse>(
-      `/addons/search?environmentId=${environmentId}&q=${encodeURIComponent(q)}&page=${page}&sort=${sort}` +
-      (categoryId != null ? `&categoryId=${categoryId}` : ''),
-    ),
-  categories: () => json<CategoryInfo[]>('/addons/categories'),
-  addonDetail: (environmentId: number, projectId: number) =>
-    json<AddonDetail>(`/addons/${projectId}?environmentId=${environmentId}`),
-  addonFiles: (environmentId: number, projectId: number) =>
-    json<AddonFile[]>(`/addons/${projectId}/files?environmentId=${environmentId}`),
-  changelog: (projectId: number, fileId: number) =>
-    json<{ text: string }>(`/addons/${projectId}/files/${fileId}/changelog`),
-  download: async (projectId: number, fileId: number): Promise<Uint8Array> => {
-    const res = await send(`/addons/${projectId}/files/${fileId}/download`)
+  // 자료실: 관리자가 올린 애드온 폴더. 목록·받기는 로그인한 사용자, 올리기·지우기는 관리자
+  library: () => json<LibraryAddon[]>('/library'),
+  downloadLibrary: async (id: string): Promise<Uint8Array> => {
+    const res = await send(`/library/${id}/download`)
     return new Uint8Array(await res.arrayBuffer())
   },
+  /** 본문(octet-stream)에 애드온 폴더 하나를 묶은 zip 을 그대로 실어 보낸다. 같은 폴더 이름이면 새 내용으로 바뀐다. */
+  adminUploadLibrary: (note: string, zip: Blob) =>
+    json<LibraryAddon>(`/admin/library?note=${encodeURIComponent(note)}`, {
+      method: 'POST', body: zip, headers: { 'Content-Type': 'application/octet-stream' },
+    }),
+  adminDeleteLibrary: (id: string) => empty(`/admin/library/${id}`, { method: 'DELETE' }),
+  /** 사용자가 설치할 때 함께 설치할 애드온을 관리자가 지정한다(.toc 에 없는 의존성 보충). 비우면 지정을 지운다. */
+  adminSetLibraryRequires: (id: string, requires: string[]) =>
+    json<LibraryAddon>(`/admin/library/${id}/requires`, { method: 'PUT', body: JSON.stringify({ requires }) }),
 
   // 관리자: 데스크톱 앱 배포(설치 파일은 프록시 크기 제한을 피하려고 조각으로 올린다)
   adminRelease: () => json<ReleaseInfo>('/admin/app-release'),

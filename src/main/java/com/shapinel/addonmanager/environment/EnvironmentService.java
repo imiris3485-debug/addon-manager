@@ -3,7 +3,6 @@ package com.shapinel.addonmanager.environment;
 import com.shapinel.addonmanager.common.code.ErrorCode;
 import com.shapinel.addonmanager.common.domain.entity.GameEnvironmentEntity;
 import com.shapinel.addonmanager.common.domain.repository.GameEnvironmentRepository;
-import com.shapinel.addonmanager.common.domain.repository.InstalledAddonRepository;
 import com.shapinel.addonmanager.common.exception.BusinessException;
 import com.shapinel.addonmanager.environment.domain.param.EnvironmentParams.EnvironmentSaveParam;
 import com.shapinel.addonmanager.environment.domain.response.EnvironmentResponses.EnvironmentResponse;
@@ -19,7 +18,6 @@ import java.util.List;
 public class EnvironmentService {
 
     private final GameEnvironmentRepository repository;
-    private final InstalledAddonRepository installedAddonRepository;
 
     @Transactional(readOnly = true)
     public List<EnvironmentResponse> getEnvironments(Long accountId) {
@@ -52,9 +50,9 @@ public class EnvironmentService {
 
     public void delete(Long accountId, Long environmentId) {
         // BaseEntity 의 deleted_at 은 JPA 가 쓸 수 없는 컬럼(DB 관리)이라 환경은 물리 삭제한다.
-        // 설치 기록이 FK 로 걸려 있으므로 먼저 지운다.
+        // ⚠️ 예전 installed_addon 테이블이 남아 있고 이 환경을 FK 로 가리키는 행이 있으면 삭제가 실패한다.
+        //    docs/sql/drop-installed-addon.sql 로 그 테이블을 지운다(CurseForge 연동 제거로 더는 쓰지 않는다).
         GameEnvironmentEntity env = getOwned(accountId, environmentId);
-        installedAddonRepository.deleteByEnvironmentId(environmentId);
         repository.delete(env);
     }
 

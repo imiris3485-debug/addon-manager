@@ -16,6 +16,10 @@ export interface DetectedFolder {
 interface AddonFsBridge {
   detect(): Promise<Result<DetectedFolder[]>>
   pick(): Promise<Result<DetectedFolder | null>>
+  /** 관리자: 자료실 원본 폴더를 OS 선택 창에서 고른다(읽기 전용으로만 열린다) */
+  pickLibrary(): Promise<Result<DetectedFolder | null>>
+  /** 이미 정해 둔 자료실 원본 폴더. 없거나 사라졌으면 null */
+  libraryInfo(): Promise<Result<DetectedFolder | null>>
   bind(key: string, envId: number): Promise<Result<void>>
   exists(key: string): Promise<Result<boolean>>
   list(key: string, rel: string[]): Promise<Result<{ name: string; kind: 'file' | 'directory' }[]>>
@@ -98,11 +102,12 @@ export class NativeDirHandle {
   constructor(
     readonly key: string,
     private readonly rel: string[] = [],
+    private readonly rootName: string = 'AddOns',
   ) {}
 
-  /** 연결된 루트는 항상 AddOns 폴더다. */
+  /** 루트의 이름. AddOns 폴더는 'AddOns', 자료실 원본은 관리자가 고른 폴더의 이름이다. */
   get name(): string {
-    return this.rel.length === 0 ? 'AddOns' : this.rel[this.rel.length - 1]
+    return this.rel.length === 0 ? this.rootName : this.rel[this.rel.length - 1]
   }
 
   private async kindOf(name: string): Promise<'file' | 'directory' | null> {
@@ -116,7 +121,7 @@ export class NativeDirHandle {
       if (!options?.create) throw new DOMException('폴더를 찾을 수 없습니다.', 'NotFoundError')
       unwrap(await bridge().mkdir(this.key, [...this.rel, name]))
     }
-    return new NativeDirHandle(this.key, [...this.rel, name])
+    return new NativeDirHandle(this.key, [...this.rel, name], this.rootName)
   }
 
   async getFileHandle(name: string, options?: { create?: boolean }): Promise<NativeFileHandle> {
@@ -135,7 +140,7 @@ export class NativeDirHandle {
 
   async *entries(): AsyncGenerator<[string, NativeDirHandle | NativeFileHandle]> {
     for (const e of unwrap(await bridge().list(this.key, this.rel))) {
-      yield [e.name, e.kind === 'directory' ? new NativeDirHandle(this.key, [...this.rel, e.name]) : new NativeFileHandle(this.key, [...this.rel, e.name])]
+      yield [e.name, e.kind === 'directory' ? new NativeDirHandle(this.key, [...this.rel, e.name], this.rootName) : new NativeFileHandle(this.key, [...this.rel, e.name])]
     }
   }
 }
@@ -151,6 +156,23 @@ export async function detectFolders(): Promise<DetectedFolder[]> {
 export async function pickNative(): Promise<{ handle: FileSystemDirectoryHandle; label: string } | null> {
   const picked = unwrap(await bridge().pick())
   return picked ? { handle: asDirectoryHandle(new NativeDirHandle(picked.key)), label: picked.label } : null
+}
+
+/** 자료실 원본 폴더를 고른다(관리자). 취소하면 null. 읽기 전용 핸들이라 쓰기·삭제는 앱이 거부한다. */
+export async function pickLibraryFolder(): Promise<{ handle: FileSystemDirectoryHandle; label: string } | null> {
+  const picked = unwrap(await bridge().pickLibrary())
+  return picked ? { handle: libraryHandle(picked), label: picked.label } : null
+}
+
+/** 이미 정해 둔 자료실 원본 폴더. 없거나 사라졌으면 null. */
+export async function getLibraryFolder(): Promise<{ handle: FileSystemDirectoryHandle; label: string } | null> {
+  const info = unwrap(await bridge().libraryInfo())
+  return info ? { handle: libraryHandle(info), label: info.label } : null
+}
+
+function libraryHandle(f: DetectedFolder): FileSystemDirectoryHandle {
+  const name = f.label.split(/[\\/]/).filter(Boolean).pop() ?? '자료실'
+  return asDirectoryHandle(new NativeDirHandle(f.key, [], name))
 }
 
 export const handleFromKey = (key: string): FileSystemDirectoryHandle => asDirectoryHandle(new NativeDirHandle(key))

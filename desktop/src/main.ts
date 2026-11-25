@@ -5,7 +5,7 @@ import { isAllowedExternalUrl } from './externalUrl'
 import { FsOps, toFsError } from './fsOps'
 import { detectAddonsPaths, isForeverAddonsPath, resolveAddonsPaths } from './locator'
 import { FsError } from './pathGuard'
-import { RootStore } from './rootStore'
+import { LIBRARY_KEY, RootStore } from './rootStore'
 import { setupAutoUpdate } from './updater'
 
 let mainWindow: BrowserWindow | null = null
@@ -23,8 +23,8 @@ const sameOrigin = (url: string): boolean => {
 }
 
 /**
- * 외부 링크(CurseForge 상세 등)는 앱 안이 아니라 기본 브라우저로 연다.
- * https 와 CurseForge 앱 설치 주소만 허용한다(externalUrl.ts). 화면이 다른 프로그램을 실행시키지 못하게 하려는 것이다.
+ * 외부 링크는 앱 안이 아니라 기본 브라우저로 연다.
+ * https 주소만 허용한다(externalUrl.ts). 화면이 다른 프로그램을 실행시키지 못하게 하려는 것이다.
  */
 function openExternal(url: string): void {
   if (isAllowedExternalUrl(url)) void shell.openExternal(url)
@@ -74,6 +74,23 @@ function registerIpc(): void {
       throw new FsError('Invalid', '게임 폴더가 여러 개 있습니다. 사용할 폴더(예: _forever_)를 직접 선택해 주세요.')
     }
     return { key: store.addPending(found[0]), label: found[0] }
+  })
+
+  // 자료실 원본 폴더(관리자). OS 선택 창에서 고른 폴더만 연결하고, 읽기 전용으로만 연다.
+  handle('fs:pickLibrary', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, { title: '자료실 원본 폴더 선택', properties: ['openDirectory'] })
+    if (result.canceled || !result.filePaths[0]) return null
+    try {
+      store.setLibrary(result.filePaths[0])
+    } catch (e) {
+      throw new FsError('Invalid', (e as Error).message)
+    }
+    return { key: LIBRARY_KEY, label: result.filePaths[0] }
+  })
+
+  handle('fs:libraryInfo', async () => {
+    const dir = store.getLibrary()
+    return dir && (await ops.exists(LIBRARY_KEY)) ? { key: LIBRARY_KEY, label: dir } : null
   })
 
   handle('fs:bind', (key, envId) => {
@@ -167,7 +184,7 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionCheckHandler(() => false)
 
     store = new RootStore(path.join(app.getPath('userData'), 'roots.json'))
-    ops = new FsOps((key) => store.rootOf(key))
+    ops = new FsOps((key) => store.rootOf(key), { isReadOnly: (key) => store.isReadOnly(key) })
     registerIpc()
     createWindow()
     setupAutoUpdate(() => mainWindow)

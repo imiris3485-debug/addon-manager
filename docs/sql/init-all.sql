@@ -1,6 +1,6 @@
 -- ============================================================
 -- addon-manager 초기화 (한 번에 실행)
--- DB 생성 → 앱 계정 → account → game_environment → installed_addon
+-- DB 생성 → 앱 계정 → account → game_environment → library_addon
 -- 이미 테이블이 있으면 건드리지 않는다(IF NOT EXISTS). 컬럼 변경은 별도 ALTER 가 필요하다.
 -- ============================================================
 
@@ -44,18 +44,24 @@ CREATE TABLE IF NOT EXISTS game_environment (
     CONSTRAINT fk_game_environment_account FOREIGN KEY (account_id) REFERENCES account (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
--- 설치 기록: 환경별 설치 스냅샷(실제 기준은 사용자의 AddOns 폴더)
-CREATE TABLE IF NOT EXISTS installed_addon (
-    id                BIGINT        NOT NULL AUTO_INCREMENT,
-    environment_id    BIGINT        NOT NULL,
-    project_id        BIGINT        NOT NULL COMMENT 'CurseForge 프로젝트(mod) ID',
-    installed_file_id BIGINT        NULL     COMMENT '설치된 파일 ID. 알 수 없으면 NULL',
-    toc_version       VARCHAR(100)  NULL     COMMENT '설치 당시 .toc Version. 파일 ID 신뢰 여부 판단용',
-    folders           VARCHAR(1000) NOT NULL COMMENT '설치된 폴더명 목록(쉼표 구분)',
-    created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    deleted_at        DATETIME      NULL,
+-- 애드온 자료실: 관리자가 올린 애드온 폴더(zip)의 메타데이터.
+-- 항목 하나 = 애드온 폴더 하나. 파일은 서버의 LIBRARY_DIR 폴더에 <public_id>.zip 으로 저장하고,
+-- 로그인한 사용자에게만 내려준다(공개 경로로 서빙하지 않는다).
+CREATE TABLE IF NOT EXISTS library_addon (
+    id           BIGINT        NOT NULL AUTO_INCREMENT,
+    public_id    CHAR(36)      NOT NULL COMMENT '외부 식별자(UUID). 순차 PK 를 노출하지 않는다',
+    name         VARCHAR(100)  NOT NULL COMMENT '애드온 폴더 이름(zip 의 최상위 폴더). 대소문자 구분 없이 유일',
+    version      VARCHAR(100)  NULL     COMMENT '.toc 의 ## Version. 화면에 보여 주는 용도',
+    content_hash CHAR(64)      NOT NULL COMMENT '폴더 내용의 SHA-256(파일 경로+파일별 해시). 내용이 같으면 올리지 않고, 사용자의 업데이트 판단에 쓴다',
+    requires     VARCHAR(1000) NULL     COMMENT '.toc 의 Dependencies/RequiredDeps(쉼표 구분). 같이 설치할 폴더',
+    extra_requires VARCHAR(1000) NULL   COMMENT '관리자가 따로 지정한 같이 설치할 폴더(쉼표 구분). .toc 에 없는 의존성용이며 다시 올려도 유지된다',
+    file_size    BIGINT        NOT NULL COMMENT 'zip 크기(바이트)',
+    note         VARCHAR(500)  NULL     COMMENT '관리자 메모(출처 등)',
+    uploaded_by  BIGINT        NOT NULL COMMENT '올린 관리자 계정 ID',
+    created_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at   DATETIME      NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_installed_addon (environment_id, project_id),
-    CONSTRAINT fk_installed_addon_environment FOREIGN KEY (environment_id) REFERENCES game_environment (id)
+    UNIQUE KEY uk_library_addon_public_id (public_id),
+    UNIQUE KEY uk_library_addon_name (name)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

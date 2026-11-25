@@ -1,5 +1,4 @@
-import { api } from './api'
-import { readFileAt } from './fingerprint'
+import { readFileAt } from './fileAccess'
 import { parseToc } from './toc'
 
 // 브라우저는 보안상 PC 의 폴더 경로를 스스로 찾을 수 없다. 사용자가 한 번 고른 폴더를 해석해서
@@ -38,7 +37,7 @@ export async function resolveAddonsFolder(picked: FileSystemDirectoryHandle): Pr
   )
 }
 
-/** 클라이언트 빌드 번호(Interface) → CurseForge 게임 버전. 알려진 클라이언트만 표로 두고 나머지는 계산한다. */
+/** 클라이언트 빌드 번호(Interface) → 게임 버전 표기. 알려진 클라이언트만 표로 두고 나머지는 계산한다. */
 const KNOWN: Record<number, string> = {
   11200: '1.12.1',
   20400: '2.4.3',
@@ -55,25 +54,12 @@ export function interfaceToGameVersion(n: number): string {
   return `${major}.${minor}.${patch}`
 }
 
-/** CurseForge 목록을 못 가져왔을 때(API 키 미설정, 장애 등)만 쓰는 최후의 값. */
-const FALLBACK_GAME_VERSION = '3.3.5'
-
-/**
- * 판단할 애드온이 없을 때 쓰는 "현재 최신 게임 버전".
- * 서버가 CurseForge 에서 받아 최신순으로 정렬해 주므로 첫 종류의 첫 버전이 가장 새로운 값이다.
- */
-async function latestGameVersion(): Promise<string> {
-  try {
-    const groups = await api.gameVersions()
-    return groups[0]?.versions[0] ?? FALLBACK_GAME_VERSION
-  } catch {
-    return FALLBACK_GAME_VERSION
-  }
-}
+/** 판단할 애드온이 없을 때 쓰는 표시. 게임 버전은 화면에 보여 주는 이름표일 뿐 설치 판단에는 쓰지 않는다. */
+const UNKNOWN_GAME_VERSION = '미확인'
 
 /**
  * 설치된 애드온의 .toc `## Interface:` 값 중 가장 많은 값으로 게임 버전을 추정한다.
- * 애드온이 없어 판단할 수 없으면 CurseForge 의 최신 게임 버전을 쓴다.
+ * 애드온이 없어 판단할 수 없으면 '미확인'으로 둔다.
  * 폴더가 많으면 오래 걸리므로 일부만 본다.
  */
 export async function detectGameVersion(addons: FileSystemDirectoryHandle): Promise<string> {
@@ -93,5 +79,5 @@ export async function detectGameVersion(addons: FileSystemDirectoryHandle): Prom
   for (const [n, c] of counts) {
     if (best == null || c > (counts.get(best) ?? 0)) best = n
   }
-  return best != null ? interfaceToGameVersion(best) : latestGameVersion()
+  return best != null ? interfaceToGameVersion(best) : UNKNOWN_GAME_VERSION
 }
