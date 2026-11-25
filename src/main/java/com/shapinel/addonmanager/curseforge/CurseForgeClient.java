@@ -77,19 +77,26 @@ public class CurseForgeClient {
     public record SearchPage(List<Mod> mods, long totalCount) {
     }
 
-    public SearchPage search(String query, String gameVersion, int index, int pageSize) {
+    /**
+     * @param sortField CurseForge 의 ModsSearchSortField(2=인기, 3=최근 갱신, 4=이름, 6=다운로드 수 등)
+     * @param sortOrder "asc" 또는 "desc"
+     * @param categoryId 분류 필터(null 이면 전체)
+     */
+    public SearchPage search(String query, String gameVersion, int index, int pageSize,
+                             int sortField, String sortOrder, Long categoryId) {
         Long classId = getAddonClassId();
         ListResponse<Mod> res = call(() -> restClient.get()
                 .uri(uri -> {
                     var b = uri.path("/v1/mods/search")
                             .queryParam("gameId", WOW_GAME_ID)
-                            .queryParam("sortField", 2)         // 2 = Popularity
-                            .queryParam("sortOrder", "desc")
+                            .queryParam("sortField", sortField)
+                            .queryParam("sortOrder", sortOrder)
                             .queryParam("index", index)
                             .queryParam("pageSize", pageSize);
                     if (query != null && !query.isBlank()) b.queryParam("searchFilter", query);
                     if (gameVersion != null && !gameVersion.isBlank()) b.queryParam("gameVersion", gameVersion);
                     if (classId != null) b.queryParam("classId", classId);
+                    if (categoryId != null) b.queryParam("categoryId", categoryId);
                     return b.build();
                 })
                 .header("x-api-key", requireKey())
@@ -234,6 +241,65 @@ public class CurseForgeClient {
             if (cmp != 0) return cmp;
         }
         return 0;
+    }
+
+    /** 프로젝트의 전체 설명(HTML). 작성자가 쓴 HTML 이므로 화면에 그대로 넣지 않고 호출한 쪽에서 글자로 바꾼다. */
+    public String getDescription(long modId) {
+        DataResponse<String> res = call(() -> restClient.get()
+                .uri("/v1/mods/{modId}/description", modId)
+                .header("x-api-key", requireKey())
+                .retrieve()
+                .body(new ParameterizedTypeReference<DataResponse<String>>() {
+                }));
+        return res == null || res.data() == null ? "" : res.data();
+    }
+
+    /** 파일의 변경 내역(HTML). 설명과 마찬가지로 호출한 쪽에서 글자로 바꾼다. */
+    public String getChangelog(long modId, long fileId) {
+        DataResponse<String> res = call(() -> restClient.get()
+                .uri("/v1/mods/{modId}/files/{fileId}/changelog", modId, fileId)
+                .header("x-api-key", requireKey())
+                .retrieve()
+                .body(new ParameterizedTypeReference<DataResponse<String>>() {
+                }));
+        return res == null || res.data() == null ? "" : res.data();
+    }
+
+    /** 프로젝트의 파일 목록(최대 pageSize 개). gameVersion 이 있으면 그 버전용 파일만. */
+    public List<ModFile> getFiles(long modId, String gameVersion, int pageSize) {
+        ListResponse<ModFile> res = call(() -> restClient.get()
+                .uri(uri -> {
+                    var b = uri.path("/v1/mods/{modId}/files").queryParam("pageSize", pageSize);
+                    if (gameVersion != null && !gameVersion.isBlank()) b.queryParam("gameVersion", gameVersion);
+                    return b.build(modId);
+                })
+                .header("x-api-key", requireKey())
+                .retrieve()
+                .body(new ParameterizedTypeReference<ListResponse<ModFile>>() {
+                }));
+        return res == null || res.data() == null ? List.of() : res.data();
+    }
+
+    private volatile Cached<List<Category>> categoriesCache;
+
+    /** 애드온 분류 목록(검색 필터용). 자주 바뀌지 않으므로 1시간 캐시한다. */
+    public List<Category> getCategories() {
+        Cached<List<Category>> c = categoriesCache;
+        if (c != null && c.valid()) return c.value();
+        Long classId = getAddonClassId();
+        ListResponse<Category> res = call(() -> restClient.get()
+                .uri(uri -> {
+                    var b = uri.path("/v1/categories").queryParam("gameId", WOW_GAME_ID);
+                    if (classId != null) b.queryParam("classId", classId);
+                    return b.build();
+                })
+                .header("x-api-key", requireKey())
+                .retrieve()
+                .body(new ParameterizedTypeReference<ListResponse<Category>>() {
+                }));
+        List<Category> list = res == null || res.data() == null ? List.of() : res.data();
+        categoriesCache = new Cached<>(list, System.currentTimeMillis() + Duration.ofHours(1).toMillis());
+        return list;
     }
 
     /** WoW 의 "Addons" 분류 ID. 검색에서 애드온만 나오게 하려고 이름으로 찾는다(못 찾으면 필터 생략). */

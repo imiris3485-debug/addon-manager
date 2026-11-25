@@ -1,7 +1,8 @@
 import { unzipSync } from 'fflate'
 import { api } from './api'
 import { invalidateFingerprints } from './scanner'
-import { firstVersion, parseToc } from './toc'
+import type { DependencyInfo } from './types'
+import { firstVersion, isTocFileFor, mergeTocs } from './toc'
 
 const MAX_UNZIPPED_BYTES = 500 * 1024 * 1024   // 압축 폭탄 방지
 
@@ -88,15 +89,93 @@ export async function installAddon(
   }
 
   // 새 .toc 의 버전을 읽어 서버 기록에 남긴다. 다음 스캔에서 이 버전이 같으면 기록한 파일 ID 를 신뢰한다.
-  const versions = []
-  for (const folder of folders) {
-    const toc = files.get(`${folder}/${folder}.toc`)
-    versions.push({ folderName: folder, tocVersion: toc ? parseToc(new TextDecoder().decode(toc)).version : null })
-  }
+  // 스캔(scanner)과 같은 규칙으로 읽는다: `Name_Vanilla.toc` 처럼 나뉜 .toc 까지 모두 본다.
+  const decoder = new TextDecoder()
+  const versions = folders.map((folder) => {
+    const texts: { fileName: string; text: string }[] = []
+    for (const [path, data] of files) {
+      const slash = path.indexOf('/')
+      const fileName = path.slice(slash + 1)
+      if (path.slice(0, slash) === folder && !fileName.includes('/') && isTocFileFor(folder, fileName)) {
+        texts.push({ fileName, text: decoder.decode(data) })
+      }
+    }
+    return { folderName: folder, tocVersion: mergeTocs(texts).version }
+  })
   const tocVersion = firstVersion(versions)
 
   await api.reportInstalled(envId, { projectId, fileId, tocVersion, folders })
   return { folders, tocVersion }
+}
+
+export interface DependencyOutcome {
+  /** 함께 설치한 필수 애드온 이름 */
+  installed: string[]
+  /** 설치하지 못한 필수 애드온과 이유 */
+  skipped: { name: string; reason: string }[]
+}
+
+export interface InstallWithDependenciesResult {
+  result: InstallResult
+  dependencies: DependencyOutcome
+}
+
+/**
+ * 필수 의존성을 먼저 설치한 뒤 요청한 애드온을 설치한다(CurseForge 앱과 같은 동작).
+ * - 이미 설치된 것은 건너뛴다(installedIds).
+ * - 의존성을 설치하지 못해도 요청한 애드온은 설치하고, 못 한 것과 이유를 돌려줘 화면에 알린다.
+ * - 의존성은 서버가 가까운 것부터 주므로, 설치는 뒤에서부터 해서 가장 안쪽 의존성을 먼저 깐다.
+ */
+export async function installWithDependencies(
+  envId: number,
+  root: FileSystemDirectoryHandle,
+  projectId: number,
+  fileId: number,
+  installedIds: Set<number>,
+  onProgress: (message: string) => void,
+): Promise<InstallWithDependenciesResult> {
+  const outcome: DependencyOutcome = { installed: [], skipped: [] }
+
+  let dependencies: DependencyInfo[] = []
+  try {
+    onProgress('필수 애드온을 확인하는 중...')
+    dependencies = await api.dependencies(envId, projectId, fileId)
+  } catch {
+    outcome.skipped.push({ name: '필수 애드온 확인', reason: '조회하지 못했습니다. 필요한 애드온이 빠졌을 수 있습니다.' })
+  }
+
+  const known = new Set(installedIds)
+  for (const dep of [...dependencies].reverse()) {
+    if (known.has(dep.projectId)) continue
+    if (dep.latestFileId == null) {
+      outcome.skipped.push({ name: dep.name, reason: '이 게임 버전용 파일이 없습니다' })
+      continue
+    }
+    if (!dep.downloadable) {
+      outcome.skipped.push({ name: dep.name, reason: '작성자가 외부 배포를 막아 CurseForge 에서 직접 받아야 합니다' })
+      continue
+    }
+    onProgress(`필수 애드온 설치 중: ${dep.name}`)
+    try {
+      await installAddon(envId, root, dep.projectId, dep.latestFileId)
+      outcome.installed.push(dep.name)
+      known.add(dep.projectId)
+    } catch (e) {
+      outcome.skipped.push({ name: dep.name, reason: (e as Error).message })
+    }
+  }
+
+  onProgress('설치 중...')
+  const result = await installAddon(envId, root, projectId, fileId)
+  return { result, dependencies: outcome }
+}
+
+/** 화면에 보여 줄 한 줄 요약. 함께 설치한 것과 못 한 것을 알린다. */
+export function describeDependencies(outcome: DependencyOutcome): string[] {
+  const lines: string[] = []
+  if (outcome.installed.length > 0) lines.push(`필수 애드온도 함께 설치했습니다: ${outcome.installed.join(', ')}`)
+  for (const s of outcome.skipped) lines.push(`⚠ ${s.name}: ${s.reason}`)
+  return lines
 }
 
 export async function removeAddon(

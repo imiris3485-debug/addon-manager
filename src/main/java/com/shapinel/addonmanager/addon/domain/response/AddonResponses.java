@@ -53,6 +53,95 @@ public class AddonResponses {
         private Long latestFileId;
         private String latestFileName;
         private boolean downloadable;
+        /** 마지막으로 파일이 올라온 시각(ISO). 모르면 프로젝트 수정 시각 */
+        private String lastUpdated;
+        private long thumbsUpCount;
+        private List<String> categories;
+        /** 관리가 중단됐거나 더 이상 제공되지 않는 애드온이면 이유. 아니면 null */
+        private String warning;
+    }
+
+    @Getter
+    @AllArgsConstructor
+    public static class CategoryResponse {
+        private Long id;
+        private String name;
+    }
+
+    @Getter
+    @AllArgsConstructor
+    public static class ScreenshotResponse {
+        private String title;
+        private String thumbnailUrl;
+        private String url;
+    }
+
+    @Getter
+    @AllArgsConstructor
+    public static class AuthorResponse {
+        private String name;
+        private String url;
+    }
+
+    /** 상세 화면용 프로젝트 정보. description 은 HTML 을 지운 글자다. */
+    @Getter
+    @AllArgsConstructor
+    public static class AddonDetailResponse {
+        private Long projectId;
+        private String name;
+        private String summary;
+        private String description;
+        private String logoUrl;
+        private List<ScreenshotResponse> screenshots;
+        private List<String> categories;
+        private List<AuthorResponse> authors;
+        private String websiteUrl;
+        private String wikiUrl;
+        private String issuesUrl;
+        private String sourceUrl;
+        private long downloadCount;
+        private long thumbsUpCount;
+        private String license;
+        private String dateCreated;
+        private String lastUpdated;
+        private String warning;
+        private boolean downloadable;
+    }
+
+    /** 프로젝트의 파일 하나. releaseType 은 RELEASE / BETA / ALPHA */
+    @Getter
+    @AllArgsConstructor
+    public static class AddonFileResponse {
+        private Long fileId;
+        private String displayName;
+        private String fileName;
+        private String releaseType;
+        private String fileDate;
+        private long fileLength;
+        private long downloadCount;
+        private List<String> gameVersions;
+        /** 이 파일이 설치하는 폴더 이름들 */
+        private List<String> folders;
+    }
+
+    @Getter
+    @AllArgsConstructor
+    public static class ChangelogResponse {
+        private String text;
+    }
+
+    /**
+     * 설치에 필요한 다른 애드온(필수 의존성). latestFileId 가 null 이면 이 게임 버전용 파일이 없어 설치할 수 없다.
+     */
+    @Getter
+    @AllArgsConstructor
+    public static class DependencyResponse {
+        private Long projectId;
+        private String name;
+        private Long latestFileId;
+        private String latestFileName;
+        /** false 면 작성자가 외부 배포를 막아 자동 설치가 불가능하다 */
+        private boolean downloadable;
     }
 
     @Getter

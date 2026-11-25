@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, session, shell, type IpcMainInvokeEvent } from 'electron'
 import * as path from 'node:path'
 import { allowedOrigin, appUrl } from './config'
+import { isAllowedExternalUrl } from './externalUrl'
 import { FsOps, toFsError } from './fsOps'
 import { detectAddonsPaths, isForeverAddonsPath, resolveAddonsPaths } from './locator'
 import { FsError } from './pathGuard'
@@ -21,13 +22,12 @@ const sameOrigin = (url: string): boolean => {
   }
 }
 
-/** 외부 링크(CurseForge 상세 등)는 앱 안이 아니라 기본 브라우저로 연다. https 만 허용한다. */
+/**
+ * 외부 링크(CurseForge 상세 등)는 앱 안이 아니라 기본 브라우저로 연다.
+ * https 와 CurseForge 앱 설치 주소만 허용한다(externalUrl.ts). 화면이 다른 프로그램을 실행시키지 못하게 하려는 것이다.
+ */
 function openExternal(url: string): void {
-  try {
-    if (new URL(url).protocol === 'https:') void shell.openExternal(url)
-  } catch {
-    /* 잘못된 주소는 무시 */
-  }
+  if (isAllowedExternalUrl(url)) void shell.openExternal(url)
 }
 
 /**

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Changelog } from '../components/Changelog'
 import { StatusBadge } from '../components/StatusBadge'
+import { curseforgeInstallUrl, curseforgeLinkAttrs } from '../lib/curseforgeLink'
 import { useEnv } from '../lib/EnvContext'
 import { hasPermission } from '../lib/handles'
-import { installAddon, removeAddon } from '../lib/installer'
+import { describeDependencies, installWithDependencies, removeAddon } from '../lib/installer'
 import { scanEnvironment } from '../lib/scanner'
 import type { InstalledAddon, ScanResponse } from '../lib/types'
 import { useFolder } from '../lib/useFolder'
@@ -22,6 +24,7 @@ export default function InstalledPage() {
   const [status, setStatus] = useState<string | null>(null)   // 진행 중 메시지(작업 중이면 값이 있음)
   const [error, setError] = useState<string | null>(null)
   const [rowState, setRowState] = useState<Record<number, string>>({})
+  const [openChangelog, setOpenChangelog] = useState<number | null>(null)
 
   const setResult = useCallback(
     (updater: (prev: ScanResponse) => ScanResponse) =>
@@ -37,6 +40,8 @@ export default function InstalledPage() {
       setStatus('스캔 준비 중...')
       const res = await scanEnvironment(envId, root, setStatus)
       qc.setQueryData(['scan', envId], res)
+      // 스캔하면 서버의 설치 기록이 이 결과로 바뀌므로 검색 화면의 "설치됨" 표시도 갱신한다
+      await qc.invalidateQueries({ queryKey: ['installed-ids', envId] })
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -59,17 +64,22 @@ export default function InstalledPage() {
   const patchAddon = (projectId: number, patch: Partial<InstalledAddon>) =>
     setResult((prev) => ({ ...prev, addons: prev.addons.map((a) => (a.projectId === projectId ? { ...a, ...patch } : a)) }))
 
-  const update = async (a: InstalledAddon, root: FileSystemDirectoryHandle) => {
-    if (envId == null || a.latestFileId == null) return
-    setRowState((s) => ({ ...s, [a.projectId]: '설치 중...' }))
+  /** 업데이트하고, 함께 새로 설치한 필수 애드온 수를 돌려준다(있으면 목록을 다시 스캔해야 한다). */
+  const update = async (a: InstalledAddon, root: FileSystemDirectoryHandle): Promise<number> => {
+    if (envId == null || a.latestFileId == null) return 0
+    const say = (text: string) => setRowState((s) => ({ ...s, [a.projectId]: text }))
+    say('설치 중...')
     try {
-      const res = await installAddon(envId, root, a.projectId, a.latestFileId)
+      const installedIds = new Set(result?.addons.map((x) => x.projectId) ?? [])
+      const { result: res, dependencies } = await installWithDependencies(
+        envId, root, a.projectId, a.latestFileId, installedIds, say)
       patchAddon(a.projectId, {
         status: 'UP_TO_DATE', installedFileId: a.latestFileId, installedVersion: res.tocVersion, folders: res.folders,
       })
-      setRowState((s) => ({ ...s, [a.projectId]: '' }))
+      say(describeDependencies(dependencies).join('\n'))
+      return dependencies.installed.length
     } catch (e) {
-      setRowState((s) => ({ ...s, [a.projectId]: `실패: ${(e as Error).message}` }))
+      say(`실패: ${(e as Error).message}`)
       throw e
     }
   }
@@ -77,7 +87,8 @@ export default function InstalledPage() {
   const onUpdate = async (a: InstalledAddon) => {
     setError(null)
     try {
-      await update(a, await folder.requireAccess())
+      const newDeps = await update(a, await folder.requireAccess())
+      if (newDeps > 0) await runScan()        // 새로 깔린 필수 애드온을 목록에 반영한다
     } catch (e) {
       setError((e as Error).message)
     }
@@ -90,15 +101,17 @@ export default function InstalledPage() {
       const root = await folder.requireAccess()
       const targets = result.addons.filter((a) => a.status === 'UPDATE_AVAILABLE' && a.downloadable)
       let failed = 0
+      let newDeps = 0
       for (const [i, a] of targets.entries()) {
         setStatus(`업데이트 중 (${i + 1}/${targets.length}) ${a.name}`)
         try {
-          await update(a, root)
+          newDeps += await update(a, root)
         } catch {
           failed++
         }
       }
       if (failed > 0) setError(`${failed}개 애드온 업데이트에 실패했습니다. 목록의 오류 메시지를 확인하세요.`)
+      if (newDeps > 0) await runScan()        // 새로 깔린 필수 애드온을 목록에 반영한다
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -113,6 +126,7 @@ export default function InstalledPage() {
       const root = await folder.requireAccess()
       await removeAddon(envId, root, a.projectId, a.folders)
       setResult((prev) => ({ ...prev, addons: prev.addons.filter((x) => x.projectId !== a.projectId) }))
+      await qc.invalidateQueries({ queryKey: ['installed-ids', envId] })
     } catch (e) {
       setError((e as Error).message)
     }
@@ -165,20 +179,33 @@ export default function InstalledPage() {
                     {a.latestFileName && <> · 최신 {a.latestFileName}</>}
                     {' · '}{a.folders.join(', ')}
                   </div>
-                  {rowState[a.projectId] && <div className="text-xs text-amber-300">{rowState[a.projectId]}</div>}
+                  {rowState[a.projectId] && <div className="whitespace-pre-line text-xs text-amber-300">{rowState[a.projectId]}</div>}
                 </div>
                 <div className="flex gap-2">
+                  {/* 업데이트하기 전에 무엇이 바뀌는지 볼 수 있게 한다 */}
+                  {a.status === 'UPDATE_AVAILABLE' && a.latestFileId != null && (
+                    <button className="btn" onClick={() => setOpenChangelog(openChangelog === a.projectId ? null : a.projectId)}>
+                      {openChangelog === a.projectId ? '변경 내역 접기' : '변경 내역'}
+                    </button>
+                  )}
                   {(a.status === 'UPDATE_AVAILABLE' || a.status === 'UNKNOWN') && a.latestFileId != null && (
                     a.downloadable
                       ? <button className="btn btn-primary" disabled={busy} onClick={() => onUpdate(a)}>
                           {a.status === 'UNKNOWN' ? '최신으로 설치' : '업데이트'}
                         </button>
-                      : a.websiteUrl
-                        ? <a className="btn" href={a.websiteUrl} target="_blank" rel="noreferrer">CurseForge 에서 받기</a>
-                        : null
+                      : <a className="btn" href={curseforgeInstallUrl(a.projectId, a.latestFileId)} {...curseforgeLinkAttrs()}
+                           title="작성자가 외부 배포를 막았습니다. CurseForge 앱이 설치돼 있으면 그 앱으로 설치합니다">
+                          CurseForge 앱으로 업데이트
+                        </a>
+                  )}
+                  {!a.downloadable && a.websiteUrl && (
+                    <a className="btn" href={a.websiteUrl} target="_blank" rel="noreferrer">CurseForge 에서 받기</a>
                   )}
                   <button className="btn btn-danger" disabled={busy} onClick={() => onRemove(a)}>삭제</button>
                 </div>
+                {openChangelog === a.projectId && a.latestFileId != null && (
+                  <div className="w-full"><Changelog projectId={a.projectId} fileId={a.latestFileId} /></div>
+                )}
               </li>
             ))}
           </ul>

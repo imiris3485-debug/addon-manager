@@ -1,7 +1,7 @@
 import { clearToken, getToken } from './auth'
 import type {
-  AccountStatus, AdminAccount, Environment, GameVersionGroup, InstallReport, ReleaseInfo, ScanEntry, ScanResponse,
-  SearchResponse, UploadStart,
+  AccountStatus, AddonDetail, AddonFile, AdminAccount, CategoryInfo, DependencyInfo, Environment, GameVersionGroup, InstallReport, ReleaseInfo, ScanEntry, ScanResponse,
+  SearchResponse, SearchSort, UploadStart,
 } from './types'
 
 export class ApiError extends Error {
@@ -76,10 +76,25 @@ export const api = {
     json<ScanResponse>(`/environments/${environmentId}/scan`, body({ entries })),
   reportInstalled: (environmentId: number, report: InstallReport) =>
     empty(`/environments/${environmentId}/installed`, body(report)),
+  /** 이 환경에 설치된 것으로 기록된 프로젝트 ID(검색 화면의 "설치됨" 표시용) */
+  installedProjectIds: (environmentId: number) => json<number[]>(`/environments/${environmentId}/installed`),
+  /** 파일이 필요로 하는 다른 애드온(필수 의존성, 의존성의 의존성 포함). 가까운 것부터 온다. */
+  dependencies: (environmentId: number, projectId: number, fileId: number) =>
+    json<DependencyInfo[]>(`/addons/${projectId}/files/${fileId}/dependencies?environmentId=${environmentId}`),
   removeInstalled: (environmentId: number, projectId: number) =>
     empty(`/environments/${environmentId}/installed/${projectId}`, { method: 'DELETE' }),
-  search: (environmentId: number, q: string, page: number) =>
-    json<SearchResponse>(`/addons/search?environmentId=${environmentId}&q=${encodeURIComponent(q)}&page=${page}`),
+  search: (environmentId: number, q: string, page: number, sort: SearchSort = 'POPULARITY', categoryId?: number | null) =>
+    json<SearchResponse>(
+      `/addons/search?environmentId=${environmentId}&q=${encodeURIComponent(q)}&page=${page}&sort=${sort}` +
+      (categoryId != null ? `&categoryId=${categoryId}` : ''),
+    ),
+  categories: () => json<CategoryInfo[]>('/addons/categories'),
+  addonDetail: (environmentId: number, projectId: number) =>
+    json<AddonDetail>(`/addons/${projectId}?environmentId=${environmentId}`),
+  addonFiles: (environmentId: number, projectId: number) =>
+    json<AddonFile[]>(`/addons/${projectId}/files?environmentId=${environmentId}`),
+  changelog: (projectId: number, fileId: number) =>
+    json<{ text: string }>(`/addons/${projectId}/files/${fileId}/changelog`),
   download: async (projectId: number, fileId: number): Promise<Uint8Array> => {
     const res = await send(`/addons/${projectId}/files/${fileId}/download`)
     return new Uint8Array(await res.arrayBuffer())
