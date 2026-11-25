@@ -20,19 +20,20 @@
 - 개발: 백엔드를 5534 로 띄운 뒤 `cd frontend && npm run dev` (5173, `/api` 는 5534 로 프록시). 빌드 검증: `npm run build`.
 - 배포 jar: `./gradlew bootJar` 한 번으로 프론트(npm)까지 빌드해 `build/libs/app.jar` 한 개에 포함한다(Node 필요). Node 없이 백엔드만 빌드하려면 `-PskipFrontend`.
 - 루트 `Dockerfile` 은 이미지 안에서 빌드하는 멀티스테이지 방식이다(선택). `src/main/resources/static/` 은 커밋하지 않는다.
-- 핵심 로직은 `src/lib/`: `scanner`(폴더의 .toc 읽기) · `hash`(내용 해시) · `installer`(zip 검사·해제·폴더 쓰기) · `library`(설치 상태·의존성 순서·설치) · `librarySync`(관리자 원본 폴더 동기화) · `handles`/`nativeFs`(폴더 핸들).
+- 핵심 로직은 `src/lib/`: `scanner`(폴더의 .toc 읽기) · `hash`(내용 해시) · `installer`(파일 목록 검사·바뀐 파일만 받아 쓰기) · `library`(설치 상태·의존성 순서·설치) · `librarySync`(관리자 원본 폴더 동기화) · `handles`/`nativeFs`(폴더 핸들).
 - **내용 해시 규칙(`hash.ts`)은 서버 `AddonZipInspector` 와 같아야 한다.** 한쪽만 바꾸면 "내용이 같은데 다르다"고 판단한다. 바꾸면 양쪽을 함께 바꾸고 실제 폴더로 같은 값이 나오는지 확인한다.
 - 운영 배포는 반드시 HTTPS 로 서빙한다.
 - 토큰으로 읽은 역할(관리자 여부)은 화면 표시용일 뿐이며, 권한 검사는 서버 `@PreAuthorize` 가 한다.
 
 ## 애드온 자료실 (library/)
 - **CurseForge 등 외부 서비스와 연동하지 않는다.** 관리자가 애드온을 모아 둔 폴더(원본 폴더)를 데스크톱 앱에서 읽어 서버에 올리고(동기화), 사용자는 자료실 목록에서 골라 설치·업데이트한다.
-- 항목 하나 = 애드온 폴더 하나(zip 의 최상위 폴더가 이름). 내용 해시(`contentHash`)가 같으면 다시 올리지 않고, 사용자는 설치 때 기록한 해시와 비교해 업데이트를 판단한다.
+- 항목 하나 = 애드온 폴더 하나. 내용 해시(`contentHash`)가 같으면 다시 올리지 않고, 사용자는 내 폴더의 실제 내용 해시와 비교해 업데이트를 판단한다.
+- **파일 단위 저장**: 애드온을 zip 한 덩어리가 아니라 파일 하나씩 올리고(`LibraryUploadService`: begin → chunk(최대 16MB, 이어 올리기) → complete) 서버에 `<id>/data/…` + `manifest.txt`(경로·크기·SHA-256)로 둔다. 그래서 크기 제한 없이 올릴 수 있고(파일 하나당 250MB, 합계 8GB), 이미 있는 같은 파일은 올리지도 받지도 않는다. 받는 쪽은 `GET /library/{id}/manifest` 로 목록을 받고 `GET /library/{id}/file?path=` 로 바뀐 파일만 받는다. 예전 zip 항목은 서버 시작 때 `LegacyLibraryMigrator` 가 한 번 바꾼다.
 - 같이 설치할 애드온 = `.toc` 의 `Dependencies`/`RequiredDeps` + 관리자가 지정한 `extra_requires`(다시 올려도 유지). 실제 애드온은 .toc 에 의존성을 선언하지 않는 경우가 많다(예: Questie → QuestieDB).
 - **공개 경로(`/downloads` 등)로 내주지 않는다.** 받기는 인증이 필요한 `/api/v1/library/{id}/download` 로만 한다. 올리기·지우기·의존성 지정은 ADMIN 전용(`AdminLibrarySecurityTest` 가 고정).
-- 올라온 zip 은 받은 사람들의 게임 폴더에 풀리므로 `AddonZipInspector` 가 올릴 때 검사한다: 경로 조작(zip slip)·Windows 특수 이름·실행 파일/스크립트(허용 확장자 목록만 통과)·압축 폭탄·중복 경로·최상위 파일·폴더 둘 이상·.toc 없음. 이 검사를 약화시키는 변경은 하지 않는다. 허용 확장자를 늘릴 때는 실행될 수 있는 형식을 넣지 않는다.
-- 받는 쪽(`installer.ts`)도 같은 확장자·경로 검사를 다시 하고, 쓰기 전에 **받은 zip 의 해시가 목록의 해시와 같은지** 확인한다. 허용 확장자 목록은 서버와 프론트가 같아야 한다.
-- 저장 파일 이름은 서버가 만든 UUID 만 쓴다(`<id>.zip`). 클라이언트가 준 이름·경로는 파일 이름에 쓰지 않는다. 파일은 `LIBRARY_DIR`, 메타데이터는 `library_addon` 테이블(`docs/sql/library-addon.sql`).
+- 올라온 파일은 받은 사람들의 게임 폴더에 그대로 쓰이므로 올릴 때 `LibraryUploadService`(검사 함수는 `AddonZipInspector`)가 파일 목록을 검사한다: 경로 조작·Windows 특수 이름·실행 파일/스크립트(허용 확장자 목록만 통과)·같은 경로 중복(대소문자 무시)·파일 수와 크기·.toc 없음. 목록에 없는 경로는 받지 않고, 선언한 크기·SHA-256 과 다른 파일은 버린다. 이 검사를 약화시키는 변경은 하지 않는다. 허용 확장자를 늘릴 때는 실행될 수 있는 형식을 넣지 않는다.
+- 받는 쪽(`installer.ts`)도 같은 확장자·경로 검사를 다시 하고, 쓰기 전에 **목록의 해시가 자료실이 알려 준 내용 해시와 같은지**, 파일마다 **내려받은 내용의 크기·SHA-256 이 목록과 같은지** 확인한 뒤에만 쓴다(확인에 실패한 파일은 쓰지 않는다). 허용 확장자 목록은 서버와 프론트가 같아야 한다.
+- 저장 폴더 이름은 서버가 만든 UUID 만 쓴다(`<id>/`). 클라이언트가 준 이름·경로는 파일 이름에 쓰지 않는다. 파일은 `LIBRARY_DIR`, 메타데이터는 `library_addon` 테이블(`docs/sql/library-addon.sql`).
 - 작성자가 재배포를 막아 둔 애드온을 올리는 것은 운영자 책임이다. 올릴 때 출처·허락 메모(`note`)를 남기고 작성자가 요청하면 바로 지운다.
 
 ## 설치 기록과 세팅 공유 (setup/)
@@ -40,8 +41,10 @@
 - 앱이 설치·업데이트·삭제한 뒤 서버에 알려(`/api/v1/installs/events`) 계정·환경별 현황(`account_addon`)과 이력(`addon_event`)을 쌓는다. 알리기에 실패해도 설치는 성공이며, 설치 상태 판단은 여전히 PC 폴더와 로컬 해시 기록으로 한다(서버 기록은 안내용).
 - 세팅·현황은 자료실 폴더 이름으로 애드온을 가리킨다(`library_addon` FK 없음. 자료실에서 지워졌다 다시 올라와도 끊기지 않게). 세팅에는 자료실에 있는 애드온만 담고, 자료실에서 사라진 것은 `missingAddons` 로 따로 알린다.
 - 고치기·지우기는 만든 사람만 한다. 남의 세팅은 존재를 알리지 않으려고 NOT_FOUND 로 답한다. 받은 사람에게는 다른 공유 대상 목록을 내려주지 않는다. 공유 대상은 로그인 ID 로 지정하고(순차 PK 비노출), 승인된(ACTIVE) 계정만 허용한다.
-- 세팅으로 설치해도 항상 자료실의 검사된 zip 만 받는다(해시 대조 포함). 이 경로로 서버가 모르는 파일이 PC 에 쓰이지 않게 한다.
+- 세팅으로 설치해도 항상 자료실의 검사된 파일만 받는다(해시 대조 포함). 이 경로로 서버가 모르는 파일이 PC 에 쓰이지 않게 한다.
 - 스키마는 `docs/sql/setup.sql`. 예전 `installed_addon`(CurseForge ID 기준)은 이어 쓰지 않는다.
+- **보관함(`addon_snapshot`)**: 내 애드온 목록의 기록. 앱이 폴더를 읽을 때 목록이 바뀌었으면 자동으로 남기고(`useAutoSnapshot`, 계정당 최근 10개), 이름을 붙여 직접 보관할 수도 있다(20개). 와우를 새로 깔거나 폴더를 다 지워도 기록으로 그대로 다시 설치하거나 편지로 보낼 수 있게 하려는 것이다. **빈 목록은 기록하지 않는다**(실수로 다 지운 직후의 "없음"이 좋은 기록을 밀어내지 않게). 기록은 계정 단위이고 환경은 요청값이 아니라 토큰 계정 소유 확인으로만 쓴다.
+- **우편함**: 세팅 공유를 편지로 보여 준다(받은 편지·보낸 편지, 안 읽은 표시 `addon_setup_target.read_at`, 편지글 1000자). 읽음 표시는 내게 온 편지에만 가능하다. 기존 DB 는 `docs/sql/snapshot-mailbox.sql` 로 보강한다(새 DB 는 `init-all.sql` 에 포함).
 
 ## 데스크톱 앱 (desktop/)
 - Chrome 은 `Program Files` 같은 시스템 폴더를 선택하지 못하게 막는다. 이를 피하려고 웹 화면을 띄우는 Electron 껍데기를 두고, **PC 폴더 작업만** 앱(main)이 맡는다. 서버는 여전히 로컬 폴더를 건드리지 않는다.
@@ -92,4 +95,4 @@ docker-compose 와 이름을 맞춘다.
 `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`,
 (MongoDB 는 현재 비활성화 상태. 복구 시 `SPRING_DATA_MONGODB_URI` 필요)
 `JWT_ACCESS_SECRET`(32바이트 이상)
-(선택: `DOWNLOADS_DIR`(앱 설치 파일 폴더), `LIBRARY_DIR`(애드온 자료실 zip 폴더), `SERVER_PORT`(기본 5534), `JWT_ACCESS_VALID_SECONDS`, `ADMIN_LOGIN_ID`/`ADMIN_PASSWORD`(최초 관리자 생성), `CORS_ALLOWED_ORIGINS`(프론트 분리 시))
+(선택: `DOWNLOADS_DIR`(앱 설치 파일 폴더), `LIBRARY_DIR`(애드온 자료실 파일 폴더), `SERVER_PORT`(기본 5534), `JWT_ACCESS_VALID_SECONDS`, `ADMIN_LOGIN_ID`/`ADMIN_PASSWORD`(최초 관리자 생성), `CORS_ALLOWED_ORIGINS`(프론트 분리 시))

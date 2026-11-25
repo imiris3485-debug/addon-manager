@@ -1,14 +1,15 @@
-import { zipSync } from 'fflate'
-import { api } from './api'
+import { api, ApiError } from './api'
 import { combineFileHashes, sha256Hex } from './hash'
+import type { ManifestFile } from './installer'
 import { scanFolders } from './scanner'
 import type { LibraryAddon } from './types'
 
 // 관리자: 자료실 원본 폴더(읽기 전용)를 서버의 자료실과 맞춘다(동기화).
-// 폴더 내용의 해시를 계산해 새로 생겼거나 바뀐 애드온만 올리므로, 하루에 한 번 돌려도 바뀐 것만 올라간다.
+// 폴더 내용의 해시를 계산해 새로 생겼거나 바뀐 애드온만 올리고, 올릴 때도 서버에 이미 있는 같은 파일은 건너뛰고 바뀐 파일만 올린다.
+// 파일 하나씩 조각으로 이어 올리므로 애드온이 아무리 커도(파일 하나당 250MB 이하) 올릴 수 있다.
 
-const MAX_ZIP_BYTES = 90 * 1024 * 1024        // 서버 상한과 같다
-const MAX_READ_BYTES = 400 * 1024 * 1024
+/** 조각 하나의 크기. 프록시(Cloudflare)의 요청 크기 제한(100MB)보다 훨씬 작게 잡아 느린 연결에서도 끊기지 않게 한다. */
+const CHUNK_BYTES = 8 * 1024 * 1024
 const MAX_DEPS = 30                           // 서버 상한(함께 설치할 애드온 지정 개수)과 같다
 
 /** NEW: 서버에 없음, CHANGED: 내용이 다름, DEPS: 내용은 같지만 함께 설치할 애드온 정보만 갱신, SAME: 같음 */
@@ -21,6 +22,10 @@ export interface SyncRow {
   kind: SyncKind
   /** 함께 설치할 애드온: .toc 의 필수·선택 의존성 중 원본 폴더에 실제로 있는 것(자기 자신 제외) */
   deps: string[]
+  /** 폴더 안의 파일 목록(경로·크기·SHA-256). 올릴 때 서버에 먼저 보낸다. */
+  files: ManifestFile[]
+  /** 파일 크기의 합(바이트) */
+  bytes: number
 }
 
 export interface SyncPlan {
@@ -45,29 +50,23 @@ async function* walkFiles(dir: FileSystemDirectoryHandle, prefix: string): Async
   }
 }
 
-/** 폴더의 내용 해시(서버가 올라온 zip 에서 계산하는 값과 같다). 파일을 하나씩 읽어 해시만 남기므로 메모리를 많이 쓰지 않는다. */
-export async function hashFolder(root: FileSystemDirectoryHandle, folder: string): Promise<string> {
-  const pairs: [string, string][] = []
+/**
+ * 폴더의 파일 목록과 내용 해시(서버가 올라온 파일 목록에서 계산하는 값과 같다). 파일을 하나씩 읽어 해시만 남기므로 메모리를 많이 쓰지 않는다.
+ * 파일 경로는 폴더 기준 상대 경로다.
+ */
+export async function scanFolderFiles(root: FileSystemDirectoryHandle, folder: string): Promise<{ files: ManifestFile[]; hash: string }> {
+  const files: ManifestFile[] = []
   for await (const [path, data] of walkFiles(await root.getDirectoryHandle(folder), folder)) {
-    pairs.push([path, await sha256Hex(data)])
+    files.push({ path: path.slice(folder.length + 1), size: data.byteLength, sha256: await sha256Hex(data) })
   }
-  if (pairs.length === 0) throw new Error(`'${folder}' 폴더에 파일이 없습니다.`)
-  return combineFileHashes(pairs)
+  if (files.length === 0) throw new Error(`'${folder}' 폴더에 파일이 없습니다.`)
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+  return { files, hash: await combineFileHashes(files.map((f): [string, string] => [`${folder}/${f.path}`, f.sha256])) }
 }
 
-/** 폴더 하나를 zip 으로 묶는다. 모든 파일을 담는다(서버가 실행 파일 등을 다시 검사한다). */
-export async function zipFolder(root: FileSystemDirectoryHandle, folder: string): Promise<Uint8Array> {
-  const files: Record<string, Uint8Array> = {}
-  let total = 0
-  for await (const [path, data] of walkFiles(await root.getDirectoryHandle(folder), folder)) {
-    total += data.byteLength
-    if (total > MAX_READ_BYTES) throw new Error(`'${folder}' 애드온이 너무 큽니다.`)
-    files[path] = data
-  }
-  if (Object.keys(files).length === 0) throw new Error(`'${folder}' 폴더에 파일이 없습니다.`)
-  const zip = zipSync(files, { level: 6 })
-  if (zip.byteLength > MAX_ZIP_BYTES) throw new Error(`'${folder}' 를 묶은 파일이 너무 큽니다(최대 ${MAX_ZIP_BYTES / 1024 / 1024}MB).`)
-  return zip
+/** 폴더의 내용 해시. */
+export async function hashFolder(root: FileSystemDirectoryHandle, folder: string): Promise<string> {
+  return (await scanFolderFiles(root, folder)).hash
 }
 
 /**
@@ -85,7 +84,7 @@ export async function buildSyncPlan(
   const rows: SyncRow[] = []
   for (const [i, f] of folders.entries()) {
     onProgress(`원본 폴더를 읽는 중 (${i + 1}/${folders.length}) ${f.name}`)
-    const hash = await hashFolder(source, f.name)
+    const { files, hash } = await scanFolderFiles(source, f.name)
     const existing = serverByName.get(f.name.toLowerCase())
     // OptionalDeps 에는 라이브러리(Ace3 등)가 섞여 있다. 원본 폴더에 애드온으로 같이 있는 것만 묶는다.
     const deps = [...f.requires, ...f.optionalRequires]
@@ -97,16 +96,80 @@ export async function buildSyncPlan(
     const kind: SyncKind = !existing ? 'NEW'
       : existing.contentHash !== hash ? 'CHANGED'
       : deps.some((d) => !known.has(d.toLowerCase())) ? 'DEPS' : 'SAME'
-    rows.push({ name: f.name, version: f.version, hash, kind, deps })
+    rows.push({ name: f.name, version: f.version, hash, kind, deps, files, bytes: files.reduce((n, x) => n + x.size, 0) })
   }
   const present = new Set(folders.map((f) => f.name.toLowerCase()))
   return { rows, removed: server.filter((s) => !present.has(s.name.toLowerCase())) }
 }
 
-/** 폴더 하나를 묶어 서버 자료실에 올린다. 같은 이름이면 새 내용으로 바뀐다. */
-export async function uploadFolder(source: FileSystemDirectoryHandle, folder: string, note: string): Promise<LibraryAddon> {
-  const zip = await zipFolder(source, folder)
-  return api.adminUploadLibrary(note, new Blob([zip as unknown as BlobPart]))
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const mb = (n: number) => (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)
+
+/** 원본 폴더 안의 파일 하나를 읽는다(폴더 기준 상대 경로). */
+async function readSourceFile(root: FileSystemDirectoryHandle, folder: string, path: string): Promise<Uint8Array> {
+  let dir = await root.getDirectoryHandle(folder)
+  const parts = path.split('/')
+  for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part)
+  const file = await (await dir.getFileHandle(parts[parts.length - 1])).getFile()
+  return new Uint8Array(await file.arrayBuffer())
+}
+
+/** 조각 하나를 올린다. 일시적인 오류는 다시 시도하고, 서버가 "다음 위치는 N" 이라고 하면(응답이 유실된 경우) 그 위치부터 이어 올린다. */
+async function uploadFile(uploadId: string, path: string, data: Uint8Array, onSent: (bytes: number) => void) {
+  let offset = 0
+  let attempt = 0
+  while (offset < data.byteLength) {
+    const end = Math.min(offset + CHUNK_BYTES, data.byteLength)
+    try {
+      await api.adminUploadChunk(uploadId, path, offset, new Blob([data.subarray(offset, end) as unknown as BlobPart]))
+      onSent(end - offset)
+      offset = end
+      attempt = 0
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        const next = Number(/(\d+)/.exec(e.message)?.[1])
+        if (Number.isInteger(next) && next > offset && next <= data.byteLength) {
+          onSent(next - offset)
+          offset = next
+          continue
+        }
+      }
+      // 서버가 거부한 경우(검사 실패 등)는 다시 해도 같으므로 바로 알린다. 네트워크 오류만 몇 번 다시 시도한다.
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) throw e
+      if (++attempt > 3) throw e
+      await sleep(1000 * attempt)
+    }
+  }
+}
+
+/**
+ * 애드온 폴더 하나를 서버 자료실에 올린다. 같은 이름이면 새 내용으로 바뀐다.
+ * 파일 목록을 먼저 보내 서버가 "올려야 할 파일"만 알려 주면, 그 파일만 조각으로 이어 올린다(이미 서버에 있는 같은 파일은 건너뜀).
+ */
+export async function uploadFolder(
+  source: FileSystemDirectoryHandle,
+  row: SyncRow,
+  note: string,
+  onProgress: (message: string) => void,
+): Promise<LibraryAddon> {
+  const begin = await api.adminUploadBegin(row.name, note, row.files)
+  try {
+    const sizeByPath = new Map(row.files.map((f) => [f.path, f.size]))
+    const totalBytes = begin.needed.reduce((n, p) => n + (sizeByPath.get(p) ?? 0), 0)
+    let sent = 0
+    for (const [i, path] of begin.needed.entries()) {
+      const data = await readSourceFile(source, row.name, path)       // 파일 하나만 메모리에 올린다
+      if (data.byteLength !== sizeByPath.get(path)) throw new Error(`'${path}' 파일이 읽는 사이에 바뀌었습니다. 동기화 계획을 다시 만들어 주세요.`)
+      await uploadFile(begin.uploadId, path, data, (bytes) => {
+        sent += bytes
+        onProgress(`올리는 중 ${row.name}: ${i + 1}/${begin.needed.length} 파일 (${mb(sent)}/${mb(totalBytes)}MB)`)
+      })
+    }
+    return await api.adminUploadComplete(begin.uploadId)
+  } catch (e) {
+    await api.adminUploadAbort(begin.uploadId).catch(() => undefined)       // 올리다 만 임시 파일은 서버에서 치운다
+    throw e
+  }
 }
 
 /**

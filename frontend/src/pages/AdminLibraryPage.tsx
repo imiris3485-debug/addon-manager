@@ -86,7 +86,7 @@ export default function AdminLibraryPage() {
           // 내용이 같고 함께 설치할 애드온 정보만 바뀐 항목은 다시 올리지 않는다
           const saved = row.kind === 'DEPS'
             ? library?.find((a) => a.name.toLowerCase() === row.name.toLowerCase())
-            : await uploadFolder(source.handle, row.name, note.trim())
+            : await uploadFolder(source.handle, row, note.trim(), setStatus)
           if (!saved) throw new Error('서버 자료실에서 항목을 찾지 못했습니다.')
           await applyDeps(saved, row.deps)
           done.add(row.name)

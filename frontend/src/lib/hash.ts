@@ -1,4 +1,4 @@
-// 폴더 내용 해시. 서버의 AddonZipInspector(contentHash)와 같은 규칙이다. 한쪽만 바꾸면 "내용이 같은데 다르다"고 판단하므로
+// 폴더 내용 해시. 서버의 LibraryLayout.contentHash 와 같은 규칙이다. 한쪽만 바꾸면 "내용이 같은데 다르다"고 판단하므로
 // 규칙을 바꿀 때는 서버와 함께 바꾼다.
 //
 //   해시 = SHA-256( 경로순으로 "경로\0파일SHA-256(16진수)\n" 을 이은 문자열(UTF-8) )
@@ -21,9 +21,3 @@ export async function combineFileHashes(pairs: [string, string][]): Promise<stri
   return sha256Hex(encoder.encode(lines))
 }
 
-/** 파일 내용이 메모리에 있을 때(zip 을 푼 결과)의 내용 해시. */
-export async function contentHash(files: Map<string, Uint8Array>): Promise<string> {
-  const pairs: [string, string][] = []
-  for (const [path, data] of files) pairs.push([path, await sha256Hex(data)])
-  return combineFileHashes(pairs)
-}

@@ -41,6 +41,7 @@ import static org.mockito.Mockito.when;
  * - 고치기·지우기는 만든 사람만 가능하며, 남의 세팅은 존재 여부를 알리지 않고 NOT_FOUND 로 답한다.
  * - 받은 사람에게는 다른 공유 대상 목록을 내려주지 않는다.
  * - 세팅은 한 사람당 30개까지.
+ * - 받은 편지를 열면 읽음으로 표시되고(내게 온 편지만), 안 읽은 편지는 목록에서 구분된다.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -162,5 +163,37 @@ class SetupServiceTest {
         assertThat(r.getTargets()).isEmpty();
         assertThat(r.getAddons()).containsExactly("Questie");
         assertThat(r.getMissingAddons()).containsExactly("Gone");
+    }
+
+    @Test
+    void 받은_편지를_열면_읽음으로_표시하고_내게_온_편지가_아니면_거부한다() {
+        AddonSetupEntity letter = AddonSetupEntity.builder().id(5L).publicId("p").ownerId(9L).name("레이드").addons("Questie").build();
+        when(setupRepository.findByPublicId("p")).thenReturn(Optional.of(letter));
+        AddonSetupTargetEntity mine = AddonSetupTargetEntity.builder().setupId(5L).accountId(2L).build();
+        when(targetRepository.findBySetupIdAndAccountId(5L, 2L)).thenReturn(Optional.of(mine));
+        when(targetRepository.findBySetupIdAndAccountId(5L, 3L)).thenReturn(Optional.empty());
+
+        service.markRead(2L, "p");
+
+        assertThat(mine.getReadAt()).isNotNull();
+        assertThatThrownBy(() -> service.markRead(3L, "p")).isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void 안_읽은_편지와_읽은_편지를_구분해_내려준다() {
+        AddonSetupEntity unread = AddonSetupEntity.builder().id(5L).publicId("a").ownerId(9L).name("새 편지").addons("Questie").build();
+        AddonSetupEntity opened = AddonSetupEntity.builder().id(6L).publicId("b").ownerId(9L).name("읽은 편지").addons("Questie").build();
+        AddonSetupTargetEntity t1 = AddonSetupTargetEntity.builder().setupId(5L).accountId(2L).build();
+        AddonSetupTargetEntity t2 = AddonSetupTargetEntity.builder().setupId(6L).accountId(2L).build();
+        t2.markRead();
+        when(setupRepository.findByOwnerIdOrderByIdDesc(2L)).thenReturn(List.of());
+        when(targetRepository.findByAccountId(2L)).thenReturn(List.of(t1, t2));
+        when(setupRepository.findByIdInOrderByIdDesc(anyCollection())).thenReturn(List.of(opened, unread));
+        when(accountRepository.findAllById(anyCollection())).thenReturn(List.of(account(9L, "boss", "대장"), account(2L, "bob", "밥")));
+
+        List<SetupResponse> received = service.list(2L).getReceived();
+
+        assertThat(received).extracting(SetupResponse::getName, SetupResponse::isRead)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("읽은 편지", true), org.assertj.core.groups.Tuple.tuple("새 편지", false));
     }
 }

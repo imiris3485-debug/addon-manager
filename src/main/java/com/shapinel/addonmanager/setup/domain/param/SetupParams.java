@@ -21,7 +21,7 @@ public class SetupParams {
         @Size(max = 50, message = "이름은 50자 이하로 입력해 주세요")
         private String name;
 
-        @Size(max = 500, message = "설명은 500자 이하로 입력해 주세요")
+        @Size(max = 1000, message = "편지글은 1000자 이하로 입력해 주세요")
         private String description;
 
         @NotEmpty(message = "애드온을 하나 이상 고르세요")

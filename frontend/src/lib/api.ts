@@ -1,5 +1,6 @@
 import { clearToken, getToken } from './auth'
-import type { AccountStatus, AdminAccount, Environment, InstallEvent, LibraryAddon, Person, ReleaseInfo, Setup, SetupInput, SetupList, UploadStart } from './types'
+import type { ManifestFile } from './installer'
+import type { AccountStatus, AdminAccount, Environment, InstallEvent, LibraryAddon, Person, ReleaseInfo, Setup, SetupInput, SetupList, Snapshot, UploadStart } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -69,15 +70,22 @@ export const api = {
 
   // 자료실: 관리자가 올린 애드온 폴더. 목록·받기는 로그인한 사용자, 올리기·지우기는 관리자
   library: () => json<LibraryAddon[]>('/library'),
-  downloadLibrary: async (id: string): Promise<Uint8Array> => {
-    const res = await send(`/library/${id}/download`)
+  /** 애드온의 파일 목록(경로·크기·SHA-256). 받는 쪽이 파일별로 내려받아 해시로 검증한다. */
+  libraryManifest: (id: string) => json<ManifestFile[]>(`/library/${id}/manifest`),
+  /** 파일 하나(폴더 기준 상대 경로) */
+  libraryFile: async (id: string, path: string): Promise<Uint8Array> => {
+    const res = await send(`/library/${id}/file?path=${encodeURIComponent(path)}`)
     return new Uint8Array(await res.arrayBuffer())
   },
-  /** 본문(octet-stream)에 애드온 폴더 하나를 묶은 zip 을 그대로 실어 보낸다. 같은 폴더 이름이면 새 내용으로 바뀐다. */
-  adminUploadLibrary: (note: string, zip: Blob) =>
-    json<LibraryAddon>(`/admin/library?note=${encodeURIComponent(note)}`, {
-      method: 'POST', body: zip, headers: { 'Content-Type': 'application/octet-stream' },
+  // 관리자 올리기: 파일 목록을 먼저 보내 서버가 "올려야 할 파일"만 알려 주면, 그 파일을 조각으로 이어 올린 뒤 끝낸다.
+  adminUploadBegin: (folder: string, note: string, files: ManifestFile[]) =>
+    json<{ uploadId: string; needed: string[] }>('/admin/library/uploads', body({ folder, note, files })),
+  adminUploadChunk: (uploadId: string, path: string, offset: number, chunk: Blob) =>
+    json<{ received: number; done: boolean }>(`/admin/library/uploads/${uploadId}/chunk?path=${encodeURIComponent(path)}&offset=${offset}`, {
+      method: 'PUT', body: chunk, headers: { 'Content-Type': 'application/octet-stream' },
     }),
+  adminUploadComplete: (uploadId: string) => json<LibraryAddon>(`/admin/library/uploads/${uploadId}/complete`, { method: 'POST' }),
+  adminUploadAbort: (uploadId: string) => empty(`/admin/library/uploads/${uploadId}`, { method: 'DELETE' }),
   adminDeleteLibrary: (id: string) => empty(`/admin/library/${id}`, { method: 'DELETE' }),
   /** 사용자가 설치할 때 함께 설치할 애드온을 관리자가 지정한다(.toc 에 없는 의존성 보충). 비우면 지정을 지운다. */
   adminSetLibraryRequires: (id: string, requires: string[]) =>
@@ -89,6 +97,15 @@ export const api = {
   createSetup: (input: SetupInput) => json<Setup>('/setups', body(input)),
   updateSetup: (id: string, input: SetupInput) => json<Setup>(`/setups/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
   deleteSetup: (id: string) => empty(`/setups/${id}`, { method: 'DELETE' }),
+  /** 받은 편지를 열었을 때 읽음으로 표시 */
+  markLetterRead: (id: string) => empty(`/setups/${id}/read`, { method: 'POST' }),
+
+  // 보관함: 내 애드온 목록의 기록
+  snapshots: () => json<Snapshot[]>('/snapshots'),
+  /** 앱이 폴더를 읽은 결과를 알린다. 직전 기록과 같거나 비어 있으면 서버가 남기지 않는다. */
+  autoSnapshot: (environmentId: number, addons: string[]) => empty('/snapshots/auto', body({ environmentId, addons })),
+  createSnapshot: (environmentId: number, label: string, addons: string[]) => json<Snapshot>('/snapshots', body({ environmentId, label, addons })),
+  deleteSnapshot: (id: string) => empty(`/snapshots/${id}`, { method: 'DELETE' }),
   recordInstalls: (environmentId: number, events: InstallEvent[]) => empty('/installs/events', body({ environmentId, events })),
 
   // 관리자: 데스크톱 앱 배포(설치 파일은 프록시 크기 제한을 피하려고 조각으로 올린다)

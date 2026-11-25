@@ -50,12 +50,12 @@ CREATE TABLE IF NOT EXISTS game_environment (
 CREATE TABLE IF NOT EXISTS library_addon (
     id           BIGINT        NOT NULL AUTO_INCREMENT,
     public_id    CHAR(36)      NOT NULL COMMENT '외부 식별자(UUID). 순차 PK 를 노출하지 않는다',
-    name         VARCHAR(100)  NOT NULL COMMENT '애드온 폴더 이름(zip 의 최상위 폴더). 대소문자 구분 없이 유일',
+    name         VARCHAR(100)  NOT NULL COMMENT '애드온 폴더 이름. 대소문자 구분 없이 유일',
     version      VARCHAR(100)  NULL     COMMENT '.toc 의 ## Version. 화면에 보여 주는 용도',
     content_hash CHAR(64)      NOT NULL COMMENT '폴더 내용의 SHA-256(파일 경로+파일별 해시). 내용이 같으면 올리지 않고, 사용자의 업데이트 판단에 쓴다',
     requires     VARCHAR(1000) NULL     COMMENT '.toc 의 Dependencies/RequiredDeps(쉼표 구분). 같이 설치할 폴더',
     extra_requires VARCHAR(1000) NULL   COMMENT '관리자가 따로 지정한 같이 설치할 폴더(쉼표 구분). .toc 에 없는 의존성용이며 다시 올려도 유지된다',
-    file_size    BIGINT        NOT NULL COMMENT 'zip 크기(바이트)',
+    file_size    BIGINT        NOT NULL COMMENT '파일 크기의 합(바이트)',
     note         VARCHAR(500)  NULL     COMMENT '관리자 메모(출처 등)',
     uploaded_by  BIGINT        NOT NULL COMMENT '올린 관리자 계정 ID',
     created_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS addon_setup (
     public_id   CHAR(36)      NOT NULL COMMENT '외부 식별자(UUID)',
     owner_id    BIGINT        NOT NULL COMMENT '만든 계정',
     name        VARCHAR(50)   NOT NULL,
-    description VARCHAR(500)  NULL,
+    description VARCHAR(1000) NULL,
     addons      VARCHAR(8000) NOT NULL COMMENT '자료실 애드온 폴더 이름(쉼표 구분)',
     created_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS addon_setup_target (
     id         BIGINT   NOT NULL AUTO_INCREMENT,
     setup_id   BIGINT   NOT NULL,
     account_id BIGINT   NOT NULL,
+    read_at    DATETIME NULL COMMENT '받은 사람이 편지를 연 시각',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at DATETIME NULL,
@@ -129,4 +130,24 @@ CREATE TABLE IF NOT EXISTS addon_setup_target (
     KEY idx_addon_setup_target_account (account_id),
     CONSTRAINT fk_addon_setup_target_setup FOREIGN KEY (setup_id) REFERENCES addon_setup (id),
     CONSTRAINT fk_addon_setup_target_account FOREIGN KEY (account_id) REFERENCES account (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- 내 애드온 목록의 기록. 폴더를 다 지웠거나 와우를 새로 깔아도 예전 목록으로 그대로 설치할 수 있게 서버에 남긴다.
+--   AUTO  : 앱이 폴더를 읽을 때 목록이 바뀐 것을 자동으로 남긴 기록(계정당 최근 10개만 유지, 빈 목록은 남기지 않는다)
+--   MANUAL: 사용자가 이름을 붙여 보관한 기록(지울 때까지 유지)
+CREATE TABLE IF NOT EXISTS addon_snapshot (
+    id           BIGINT        NOT NULL AUTO_INCREMENT,
+    public_id    CHAR(36)      NOT NULL COMMENT '외부 식별자(UUID)',
+    account_id   BIGINT        NOT NULL,
+    game_version VARCHAR(20)   NULL     COMMENT '기록할 때 게임 환경의 게임 버전',
+    source       VARCHAR(10)   NOT NULL COMMENT 'AUTO / MANUAL',
+    label        VARCHAR(50)   NULL     COMMENT 'MANUAL 기록의 이름',
+    addons       VARCHAR(8000) NOT NULL COMMENT '자료실 애드온 폴더 이름(쉼표 구분, 이름순). 같은 목록인지 비교할 수 있게 정렬해 둔다',
+    created_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at   DATETIME      NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_addon_snapshot_public_id (public_id),
+    KEY idx_addon_snapshot_account (account_id, id),
+    CONSTRAINT fk_addon_snapshot_account FOREIGN KEY (account_id) REFERENCES account (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

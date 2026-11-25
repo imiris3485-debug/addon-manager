@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface AddonSetupTargetRepository extends JpaRepository<AddonSetupTargetEntity, Long> {
 
@@ -13,6 +14,8 @@ public interface AddonSetupTargetRepository extends JpaRepository<AddonSetupTarg
     List<AddonSetupTargetEntity> findByAccountId(Long accountId);
 
     boolean existsBySetupIdAndAccountId(Long setupId, Long accountId);
+
+    Optional<AddonSetupTargetEntity> findBySetupIdAndAccountId(Long setupId, Long accountId);
 
     void deleteBySetupId(Long setupId);
 }

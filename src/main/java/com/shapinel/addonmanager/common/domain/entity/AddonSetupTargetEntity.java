@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -30,4 +31,12 @@ public class AddonSetupTargetEntity extends BaseEntity {
 
     @Column(name = "account_id", nullable = false, updatable = false)
     private Long accountId;
+
+    /** 받은 사람이 편지를 연 시각(null 이면 안 읽은 편지) */
+    @Column(name = "read_at")
+    private LocalDateTime readAt;
+
+    public void markRead() {
+        if (readAt == null) readAt = LocalDateTime.now();
+    }
 }

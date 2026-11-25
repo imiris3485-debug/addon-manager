@@ -6,6 +6,7 @@ import { useEnv } from '../lib/EnvContext'
 import { formatAgo, formatBytes } from '../lib/format'
 import { removeFolder } from '../lib/installer'
 import { forgetInstalled, installFromLibrary, libraryState, reportInstalls, satisfiedNames, type LibraryState } from '../lib/library'
+import { useAutoSnapshot } from '../lib/useAutoSnapshot'
 import { useInstalledHashes } from '../lib/useInstalledHashes'
 import { isDesktop } from '../lib/nativeFs'
 import { scanFolders } from '../lib/scanner'
@@ -19,7 +20,10 @@ const FILTER_LABEL: Record<Filter, string> = {
   ALL: '전체', NOT_INSTALLED: '새 의뢰(설치 안 함)', INSTALLED: '설치됨', UPDATE_AVAILABLE: '갱신할 수 있음',
 }
 
-/** 목록의 한 줄. state 가 null 이면 자료실에 없는 폴더(내 설치 목록에서만). */
+/**
+ * 목록의 한 줄. state 가 null 이면 자료실에 없는 폴더(내 설치 목록에서만).
+ * state 는 함께 설치되는 애드온까지 합친 묶음의 상태이고, ownState 는 이 애드온 하나만의 상태다.
+ */
 interface Entry {
   key: string
   name: string
@@ -27,6 +31,65 @@ interface Entry {
   item?: LibraryAddon
   local?: LocalFolder
   state: LibraryState | null
+  ownState: LibraryState | null
+  /** 이 애드온과 함께 설치되는 자료실 애드온(의존성의 의존성까지) */
+  deps: LibraryAddon[]
+}
+
+const lc = (s: string) => s.toLowerCase()
+
+/** 함께 설치되는 자료실 애드온(의존성의 의존성까지, 자기 자신 제외). 순환해도 한 번씩만 담는다. */
+function transitiveDeps(item: LibraryAddon, byName: Map<string, LibraryAddon>): LibraryAddon[] {
+  const out: LibraryAddon[] = []
+  const seen = new Set([lc(item.name)])
+  const queue = [item]
+  for (let depth = 0; queue.length > 0 && depth < 10; depth++) {
+    const next: LibraryAddon[] = []
+    for (const a of queue) {
+      for (const r of a.requires) {
+        const dep = byName.get(lc(r))
+        if (dep && !seen.has(lc(dep.name))) {
+          seen.add(lc(dep.name))
+          out.push(dep)
+          next.push(dep)
+        }
+      }
+    }
+    queue.length = 0
+    queue.push(...next)
+  }
+  return out
+}
+
+/**
+ * 다른 애드온이 필요로 하는 애드온(소문자 이름). 목록에서는 부모 아래로 묶어 숨긴다(예: QuestieDB 는 Questie 아래).
+ * 서로 필요로 하는 순환 관계는 어느 쪽도 숨기지 않는다.
+ */
+function dependencyNames(library: LibraryAddon[]): Set<string> {
+  const byName = new Map(library.map((a) => [lc(a.name), a]))
+  const hidden = new Set<string>()
+  for (const a of library) {
+    for (const r of a.requires) {
+      const dep = byName.get(lc(r))
+      if (!dep || dep === a) continue
+      if (dep.requires.some((x) => lc(x) === lc(a.name))) continue
+      hidden.add(lc(dep.name))
+    }
+  }
+  return hidden
+}
+
+/**
+ * 묶음의 상태. 부모는 최신이어도 함께 설치되는 애드온이 오래됐거나 없으면 "갱신할 수 있음"이다
+ * (부모를 갱신하면 함께 설치되는 것도 최신이 되기 때문이다).
+ */
+function groupState(own: LibraryState, deps: LibraryAddon[], localByName: Map<string, LocalFolder>, hashes: Record<string, string>): LibraryState {
+  if (own === 'NOT_INSTALLED' || own === 'UPDATE_AVAILABLE') return own
+  for (const d of deps) {
+    const s = libraryState(d, localByName.get(lc(d.name)), hashes)
+    if (s === 'UPDATE_AVAILABLE' || s === 'NOT_INSTALLED') return 'UPDATE_AVAILABLE'
+  }
+  return own
 }
 
 export default function LibraryPage() {
@@ -57,12 +120,23 @@ export default function LibraryPage() {
   // 폴더의 실제 내용 해시(자료실과 정확히 비교). 설치 기록·버전은 실제 해시를 못 구했을 때의 대비책이다.
   const { hashes, hashing } = useInstalledHashes(envId, folder.handle, local, library, dataUpdatedAt)
   const scanning = scanningFolders || hashing
+  // 폴더를 읽을 때마다 내 애드온 목록이 바뀌었으면 서버 보관함에 자동으로 남긴다(실패해도 화면에는 영향 없음)
+  useAutoSnapshot(envId, local, library)
   const libraryNames = useMemo(() => new Set((library ?? []).map((a) => a.name.toLowerCase())), [library])
+
+  const libraryByName = useMemo(() => new Map((library ?? []).map((a) => [a.name.toLowerCase(), a])), [library])
+  // 다른 애드온의 의존성으로 쓰이는 애드온: 목록에서는 부모 아래로 묶어 숨긴다(검색할 때는 모두 보인다)
+  const hiddenDeps = useMemo(() => dependencyNames(library ?? []), [library])
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
     return (library ?? [])
-      .map((item) => ({ item, state: desktop ? libraryState(item, localByName.get(item.name.toLowerCase()), hashes) : ('NOT_INSTALLED' as LibraryState) }))
+      .filter((item) => !!q || !hiddenDeps.has(lc(item.name)))
+      .map((item) => {
+        const deps = transitiveDeps(item, libraryByName)
+        const own = desktop ? libraryState(item, localByName.get(lc(item.name)), hashes) : ('NOT_INSTALLED' as LibraryState)
+        return { item, deps, ownState: own, state: desktop ? groupState(own, deps, localByName, hashes) : own }
+      })
       .filter(({ item }) => !q || item.name.toLowerCase().includes(q))
       .filter(({ state }) => {
         if (!desktop || filter === 'ALL') return true
@@ -71,22 +145,35 @@ export default function LibraryPage() {
         return state === 'UPDATE_AVAILABLE'
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [library, localByName, query, filter, desktop, local, hashes])
+  }, [library, libraryByName, hiddenDeps, localByName, query, filter, desktop, local, hashes])
 
-  const outdated = rows.filter((r) => r.state === 'UPDATE_AVAILABLE').map((r) => r.item)
-  const libraryByName = useMemo(() => new Map((library ?? []).map((a) => [a.name.toLowerCase(), a])), [library])
+  // 부모(묶음) 기준 상태. 필터·검색과 무관하다. "모두 갱신"은 부모를 갱신하면서 함께 설치되는 것도 최신으로 올린다.
+  const topItems = useMemo(() => (library ?? []).filter((a) => !hiddenDeps.has(lc(a.name))).map((item) => {
+    const deps = transitiveDeps(item, libraryByName)
+    const own = libraryState(item, localByName.get(lc(item.name)), hashes)
+    return { item, state: groupState(own, deps, localByName, hashes) }
+  }), [library, libraryByName, hiddenDeps, localByName, hashes])
+  const outdated = topItems.filter((r) => r.state === 'UPDATE_AVAILABLE').map((r) => r.item)
   // 내 PC 의 AddOns 폴더에 있는 모든 애드온(자료실에 있든 없든). 개별 업데이트·삭제는 여기서 한다.
   const installedRows = useMemo(() => {
     const q = query.trim().toLowerCase()
+    // 설치된 부모 애드온이 함께 설치하는 폴더들(부모 아래로 묶어 숨긴다. 검색할 때는 모두 보인다)
+    const covered = new Set<string>()
+    for (const l of local ?? []) {
+      const item = libraryByName.get(lc(l.name))
+      if (item && !hiddenDeps.has(lc(item.name))) for (const d of transitiveDeps(item, libraryByName)) covered.add(lc(d.name))
+    }
     return (local ?? [])
-      .filter((l) => !q || l.name.toLowerCase().includes(q))
+      .filter((l) => !q ? !covered.has(lc(l.name)) : l.name.toLowerCase().includes(q))
       .map((l) => {
-        const item = libraryByName.get(l.name.toLowerCase())
-        return { folder: l, item, state: item ? libraryState(item, l, hashes) : null }
+        const item = libraryByName.get(lc(l.name))
+        const deps = item ? transitiveDeps(item, libraryByName) : []
+        const own = item ? libraryState(item, l, hashes) : null
+        return { folder: l, item, deps, ownState: own, state: own ? groupState(own, deps, localByName, hashes) : null }
       })
       .sort((a, b) => a.folder.name.localeCompare(b.folder.name))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [local, libraryByName, query, hashes])
+  }, [local, libraryByName, hiddenDeps, localByName, query, hashes])
 
   const install = async (item: LibraryAddon) => {
     if (envId == null || !library) return
@@ -189,21 +276,20 @@ export default function LibraryPage() {
 
   // 왼쪽 쪽(의뢰 목록)에 보일 항목. 자료실 탭은 자료실 애드온, 설치 목록 탭은 이 PC 폴더 전부.
   const entries: Entry[] = view === 'LIBRARY'
-    ? rows.map(({ item, state }) => ({ key: `lib:${item.id}`, name: item.name, version: item.version, item, local: localByName.get(item.name.toLowerCase()), state }))
-    : installedRows.map(({ folder: f, item, state }) => ({ key: `loc:${f.name}`, name: f.name, version: f.version, item, local: f, state }))
+    ? rows.map(({ item, state, ownState, deps }) => ({ key: `lib:${item.id}`, name: item.name, version: item.version, item, local: localByName.get(item.name.toLowerCase()), state, ownState, deps }))
+    : installedRows.map(({ folder: f, item, state, ownState, deps }) => ({ key: `loc:${f.name}`, name: f.name, version: f.version, item, local: f, state, ownState, deps }))
   const selected = entries.find((e) => e.key === selectedKey) ?? entries[0]
 
   // 상단 요약(필터와 무관하게 자료실 전체 기준)
   const summary = useMemo(() => {
     let fresh = 0, update = 0, done = 0
-    for (const item of library ?? []) {
-      const s = libraryState(item, localByName.get(item.name.toLowerCase()), hashes)
-      if (s === 'NOT_INSTALLED') fresh++
-      else if (s === 'UPDATE_AVAILABLE') update++
+    for (const { state } of topItems) {
+      if (state === 'NOT_INSTALLED') fresh++
+      else if (state === 'UPDATE_AVAILABLE') update++
       else done++
     }
     return { fresh, update, done }
-  }, [library, localByName, hashes])
+  }, [topItems])
 
   const tabCls = (active: boolean) =>
     `rounded-t px-4 py-2 text-sm transition ${active ? 'bg-[#e9d8b0] font-bold text-[#3b2412] shadow-[inset_0_2px_0_#fff3cf]' : 'text-slate-300 hover:text-white'}`
@@ -336,7 +422,7 @@ function Detail({ entry, desktop, message, busy, canAct, libraryByName, localByN
   onInstall: () => void
   onRemove: () => void
 }) {
-  const { item, local, state } = entry
+  const { item, local, state, ownState, deps } = entry
   const look = RING[state ?? 'OTHER'] ?? RING.OTHER
   const m = marker(entry, desktop)
   const primary = state === 'NOT_INSTALLED' ? '설치하기' : state === 'UPDATE_AVAILABLE' ? '갱신하기' : state === 'UNKNOWN' ? '자료실 것으로 설치' : null
@@ -380,29 +466,31 @@ function Detail({ entry, desktop, message, busy, canAct, libraryByName, localByN
               <span className="ink-soft" aria-hidden="true">→</span>
               <span className="rounded border px-3 py-1.5 font-bold" style={{ color: look.text, borderColor: look.ring }}>자료실 {item.version ? `v${item.version}` : '버전 표시 없음'}</span>
               <span className="ink-soft w-full text-xs">
-                {state === 'UP_TO_DATE' ? '내용이 자료실과 같습니다.' : state === 'UPDATE_AVAILABLE' ? '내용이 자료실과 다릅니다. 갱신하면 자료실의 내용으로 바뀝니다.' : '자료실과 같은지 확인할 수 없습니다.'}
+                {ownState === 'UP_TO_DATE' ? '내용이 자료실과 같습니다.' : ownState === 'UPDATE_AVAILABLE' ? '내용이 자료실과 다릅니다. 갱신하면 자료실의 내용으로 바뀝니다.' : '자료실과 같은지 확인할 수 없습니다.'}
               </span>
             </div>
           )}
         </section>
       )}
 
-      {item && item.requires.length > 0 && (
+      {item && (deps.length > 0 || item.requires.length > 0) && (
         <section className="space-y-2">
-          <h3 className="ink-red text-lg font-bold">함께하는 동료</h3>
-          <p className="ink-soft text-sm">이 애드온과 함께 설치·갱신됩니다.</p>
+          <h3 className="ink-red text-lg font-bold">함께 설치되는 애드온</h3>
+          <p className="ink-soft text-sm">이 애드온을 설치·갱신하면 아래 애드온도 함께 설치·갱신됩니다. 이미 최신이면 건드리지 않습니다.</p>
           <ul className="flex flex-wrap gap-2">
-            {item.requires.map((r) => {
-              const dep = libraryByName.get(r.toLowerCase())
-              const depState = dep && desktop ? libraryState(dep, localByName.get(r.toLowerCase()), hashes) : null
+            {deps.map((dep) => {
+              const depState = desktop ? libraryState(dep, localByName.get(dep.name.toLowerCase()), hashes) : null
               const dm = (depState && RING[depState]) || RING.OTHER
-              const label = !dep ? '자료실에 없음' : depState === 'UP_TO_DATE' ? '최신' : depState === 'UPDATE_AVAILABLE' ? '갱신 가능' : depState === 'NOT_INSTALLED' ? '설치 안 함' : ''
+              const label = depState === 'UP_TO_DATE' ? '최신' : depState === 'UPDATE_AVAILABLE' ? '갱신 가능' : depState === 'NOT_INSTALLED' ? '설치 안 함' : ''
               return (
-                <li key={r} className="rounded border px-3 py-1 text-sm" style={{ color: dm.text, borderColor: dm.ring }}>
-                  {r}{label && <span className="ml-2 text-xs opacity-80">{label}</span>}
+                <li key={dep.id} className="rounded border px-3 py-1 text-sm" style={{ color: dm.text, borderColor: dm.ring }}>
+                  {dep.name}{dep.version && <span className="ml-1.5 text-xs opacity-70">v{dep.version}</span>}{label && <span className="ml-2 text-xs opacity-80">{label}</span>}
                 </li>
               )
             })}
+            {item.requires.filter((r) => !libraryByName.has(r.toLowerCase())).map((r) => (
+              <li key={r} className="rounded border px-3 py-1 text-sm" style={{ color: '#9a4a00', borderColor: '#d9822b' }}>{r}<span className="ml-2 text-xs opacity-80">자료실에 없음</span></li>
+            ))}
           </ul>
         </section>
       )}

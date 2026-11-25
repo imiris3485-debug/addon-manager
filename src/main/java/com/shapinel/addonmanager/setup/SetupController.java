@@ -64,6 +64,13 @@ public class SetupController {
         return ResponseEntity.ok(setupService.update(JwtClaims.userId(jwt), id, param));
     }
 
+    @Operation(summary = "편지 읽음 표시", description = "내가 받은 편지를 열었을 때 읽음으로 표시한다")
+    @PostMapping("/setups/{id}/read")
+    public ResponseEntity<Void> read(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) {
+        setupService.markRead(JwtClaims.userId(jwt), id);
+        return ResponseEntity.noContent().build();
+    }
+
     @Operation(summary = "세팅 지우기", description = "만든 사람만 지울 수 있다")
     @DeleteMapping("/setups/{id}")
     public ResponseEntity<Void> delete(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) {

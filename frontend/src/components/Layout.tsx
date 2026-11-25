@@ -53,9 +53,9 @@ function Header() {
   const { info, isAdmin, logout } = useAuth()
   const { status, current, changeFolder } = useEnv()
   const desktop = isDesktop()
-  // 받은 세팅 개수(새로 받은 것을 알아채도록 메뉴에 표시한다)
+  // 안 읽은 편지 개수(새 편지를 알아채도록 메뉴에 표시한다)
   const { data: setups } = useQuery({ queryKey: ['setups'], queryFn: api.setups })
-  const receivedCount = setups?.received.length ?? 0
+  const receivedCount = setups?.received.filter((s) => !s.read).length ?? 0
   // 앱에서는 와우 폴더 연결이 끝나기 전에 애드온 메뉴를 보여 주지 않는다
   const ready = status === 'ready'
 
@@ -71,10 +71,11 @@ function Header() {
         <nav className="flex flex-wrap gap-1">
           {(!desktop || ready) && <NavLink to="/library" className={navCls}>자료실</NavLink>}
           {(!desktop || ready) && (
-            <NavLink to="/setups" className={navCls}>
+            <NavLink to="/mailbox" className={navCls}>
               우편함{receivedCount > 0 && <span className="ml-1.5 rounded-full bg-[#8a1c1c] px-1.5 py-0.5 text-xs font-bold text-[#ffe9bf]">{receivedCount}</span>}
             </NavLink>
           )}
+          {(!desktop || ready) && <NavLink to="/vault" className={navCls}>보관함</NavLink>}
           {!desktop && <NavLink to="/download" className={navCls}>앱 다운로드</NavLink>}
           {isAdmin && <NavLink to="/admin/library" className={navCls}>자료실 관리</NavLink>}
           {isAdmin && <NavLink to="/admin/release" className={navCls}>앱 배포</NavLink>}

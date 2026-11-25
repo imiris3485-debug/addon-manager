@@ -3,51 +3,46 @@ package com.shapinel.addonmanager.library;
 import com.shapinel.addonmanager.common.code.ErrorCode;
 import com.shapinel.addonmanager.common.domain.entity.LibraryAddonEntity;
 import com.shapinel.addonmanager.common.exception.BusinessException;
+import com.shapinel.addonmanager.library.LibraryLayout.FileSpec;
+import com.shapinel.addonmanager.library.domain.response.LibraryResponses.FileResponse;
 import com.shapinel.addonmanager.library.domain.response.LibraryResponses.LibraryAddonResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.core.io.Resource;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 자료실 정책
- * - 검사를 통과한 zip 만 서버 폴더에 UUID 이름으로 저장한다(클라이언트가 준 이름·경로는 파일 이름에 쓰지 않는다).
- *   자료실에서의 이름은 요청값이 아니라 zip 의 최상위 폴더에서 가져온다.
- * - 검사에 실패하거나 크기를 넘는 업로드는 파일을 남기지 않고 DB 에도 기록하지 않는다.
- * - 같은 폴더를 다시 올리면 같은 ID 에 새 파일로 바꾼다(업데이트).
- * - 경로가 섞인 ID 로는 받거나 지울 수 없다. 저장 폴더가 설정되지 않으면 기능이 꺼진다.
+ * 자료실(내려받기·지우기) 정책
+ * - 받는 쪽에는 "파일 목록(경로·크기·SHA-256)"과 목록에 있는 파일만 내려준다. 목록에 없는 경로나 폴더 밖으로 나가는 경로는 거부한다.
+ * - 경로가 섞인 ID 로는 받거나 지울 수 없고, 저장 폴더가 설정되지 않으면 기능이 꺼진다.
+ * - 지우면 DB 와 서버의 파일(옛 zip 포함)을 모두 지운다.
+ * - 같이 설치할 애드온 지정은 폴더 이름만 받는다(경로 문자 거부).
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class LibraryServiceTest {
 
-    private static final long ADMIN = 1L;
-    private static final String UUID_A = "1a2b3c4d-2222-3333-4444-55555555abcd";
+    private static final String ID = "1a2b3c4d-2222-3333-4444-55555555abcd";
 
     @TempDir
     Path tmp;
@@ -59,298 +54,97 @@ class LibraryServiceTest {
     LibraryService service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         dir = tmp.resolve("library");
         service = new LibraryService(dir, store);
-    }
+        when(store.findByPublicId(ID)).thenReturn(Optional.of(LibraryAddonEntity.builder().publicId(ID).name("Details").build()));
 
-    private static byte[] zip(String... pairs) throws IOException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (ZipOutputStream out = new ZipOutputStream(bytes)) {
-            for (int i = 0; i < pairs.length; i += 2) {
-                out.putNextEntry(new ZipEntry(pairs[i]));
-                out.write(pairs[i + 1].getBytes(StandardCharsets.UTF_8));
-                out.closeEntry();
-            }
-        }
-        return bytes.toByteArray();
-    }
-
-    private static byte[] validZip() throws IOException {
-        return zip("Details/Details.toc", "## Version: 1.2.3\n## Dependencies: Lib\n", "Details/Details.lua", "x");
-    }
-
-    private static LibraryAddonEntity entity(String publicId, String name) {
-        return LibraryAddonEntity.builder().publicId(publicId).name(name).version("1.2.3").contentHash("a".repeat(64))
-                .requires("Lib,Other").fileSize(100).note("메모").uploadedBy(ADMIN).build();
-    }
-
-    private long filesInDir() throws IOException {
-        if (!Files.exists(dir)) return 0;
-        try (Stream<Path> s = Files.list(dir)) {
-            return s.count();
-        }
-    }
-
-    private static void assertCode(Throwable t, ErrorCode code) {
-        assertThat(t).isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(code));
-    }
-
-    // ------------------------------------------------------------------ 업로드
-
-    @Test
-    void 검사를_통과한_zip_을_UUID_이름으로_저장하고_이름은_zip_의_폴더에서_가져온다() throws IOException {
-        byte[] data = validZip();
-        when(store.findByName("Details")).thenReturn(Optional.empty());
-        when(store.upsert(any(), eq("Details"), eq("1.2.3"), any(), eq("Lib"), eq((long) data.length), eq("메모"), eq(ADMIN)))
-                .thenReturn(entity(UUID_A, "Details"));
-
-        LibraryAddonResponse result = service.upload(ADMIN, "메모", new ByteArrayInputStream(data));
-
-        assertThat(result.getName()).isEqualTo("Details");
-        ArgumentCaptor<String> id = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
-        verify(store).upsert(id.capture(), eq("Details"), eq("1.2.3"), hash.capture(), eq("Lib"), eq((long) data.length), eq("메모"), eq(ADMIN));
-        assertThat(id.getValue()).matches("^[0-9a-f-]{36}$");
-        assertThat(Files.readAllBytes(dir.resolve(id.getValue() + ".zip"))).isEqualTo(data);
-        assertThat(hash.getValue()).hasSize(64).matches("^[0-9a-f]+$");
-        assertThat(filesInDir()).isEqualTo(1);                       // 임시 파일이 남지 않는다
+        // 항목 하나를 파일 단위 저장 형태로 만들어 둔다
+        Path item = dir.resolve(ID);
+        Files.createDirectories(item.resolve("data/libs"));
+        Files.writeString(item.resolve("data/Details.toc"), "## Version: 1\n", StandardCharsets.UTF_8);
+        Files.writeString(item.resolve("data/libs/a.lua"), "x", StandardCharsets.UTF_8);
+        LibraryLayout.writeManifest(item, List.of(new FileSpec("Details.toc", 13, "a".repeat(64)), new FileSpec("libs/a.lua", 1, "b".repeat(64))));
+        // 폴더 밖에 있는 비밀 파일(목록에도 없다)
+        Files.writeString(dir.resolve("secret.txt"), "비밀", StandardCharsets.UTF_8);
     }
 
     @Test
-    void 같은_폴더를_다시_올리면_같은_ID_에_새_파일로_바꾼다() throws IOException {
-        byte[] data = validZip();
-        when(store.findByName("Details")).thenReturn(Optional.of(entity(UUID_A, "Details")));
-        when(store.upsert(eq(UUID_A), any(), any(), any(), any(), anyLong(), any(), any())).thenReturn(entity(UUID_A, "Details"));
-        Files.createDirectories(dir);
-        Files.write(dir.resolve(UUID_A + ".zip"), new byte[]{1, 2, 3});
+    void 파일_목록을_경로_크기_해시로_내려준다() {
+        List<FileResponse> files = service.manifest(ID);
 
-        service.upload(ADMIN, null, new ByteArrayInputStream(data));
-
-        assertThat(Files.readAllBytes(dir.resolve(UUID_A + ".zip"))).isEqualTo(data);
-        assertThat(filesInDir()).isEqualTo(1);
+        assertThat(files).extracting(FileResponse::getPath).containsExactly("Details.toc", "libs/a.lua");
+        assertThat(files.get(1).getSize()).isEqualTo(1);
+        assertThat(files.get(1).getSha256()).isEqualTo("b".repeat(64));
     }
 
     @Test
-    void 실행_파일이_든_zip_은_거부하고_파일도_기록도_남기지_않는다() throws IOException {
-        byte[] bad = zip("Details/Details.toc", "## Version: 1\n", "Details/evil.exe", "MZ");
+    void 목록에_있는_파일만_내려준다() throws IOException {
+        Resource r = service.file(ID, "libs/a.lua");
 
-        assertThatThrownBy(() -> service.upload(ADMIN, null, new ByteArrayInputStream(bad)))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-
-        assertThat(filesInDir()).isZero();
-        verify(store, never()).upsert(any(), any(), any(), any(), any(), anyLong(), any(), any());
+        assertThat(r.getContentAsString(StandardCharsets.UTF_8)).isEqualTo("x");
     }
 
     @Test
-    void 경로_조작이_든_zip_은_거부한다() throws IOException {
-        byte[] bad = zip("Details/Details.toc", "## Version: 1\n", "Details/../../escape.lua", "x");
-
-        assertThatThrownBy(() -> service.upload(ADMIN, null, new ByteArrayInputStream(bad)))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        assertThat(filesInDir()).isZero();
+    void 목록에_없거나_폴더_밖으로_나가는_경로는_거부한다() {
+        assertThatThrownBy(() -> service.file(ID, "libs/other.lua")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.file(ID, "../../secret.txt")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.file(ID, "/etc/passwd")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.file(ID, "C:/Windows/win.ini")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.file(ID, "..\\secret.txt")).isInstanceOf(BusinessException.class);
     }
 
     @Test
-    void 폴더가_둘_이상인_zip_은_거부한다() throws IOException {
-        byte[] bad = zip("A/A.toc", "## Version: 1\n", "B/B.toc", "## Version: 1\n");
-
-        assertThatThrownBy(() -> service.upload(ADMIN, null, new ByteArrayInputStream(bad)))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        assertThat(filesInDir()).isZero();
-    }
-
-    @Test
-    void zip_이_아닌_파일과_빈_본문은_거부한다() throws IOException {
-        assertThatThrownBy(() -> service.upload(ADMIN, null, new ByteArrayInputStream("not a zip".getBytes(StandardCharsets.UTF_8))))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        assertThatThrownBy(() -> service.upload(ADMIN, null, new ByteArrayInputStream(new byte[0])))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        assertThat(filesInDir()).isZero();
-    }
-
-    @Test
-    void 크기_상한을_넘으면_거부하고_임시_파일을_지운다() throws IOException {
-        // 상한(90MB)보다 1바이트 큰 스트림. 메모리에 올리지 않고 0 을 흘려 보낸다.
-        InputStream tooBig = new InputStream() {
-            long remaining = LibraryService.MAX_ZIP_BYTES + 1;
-
-            @Override
-            public int read() {
-                return remaining-- > 0 ? 0 : -1;
-            }
-
-            @Override
-            public int read(byte[] b, int off, int len) {
-                if (remaining <= 0) return -1;
-                int n = (int) Math.min(len, remaining);
-                remaining -= n;
-                return n;
-            }
-        };
-
-        assertThatThrownBy(() -> service.upload(ADMIN, null, tooBig)).satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-
-        assertThat(filesInDir()).isZero();
-    }
-
-    @Test
-    void 메모가_너무_길거나_제어문자가_있으면_거부한다() throws IOException {
-        byte[] data = validZip();
-        assertThatThrownBy(() -> service.upload(ADMIN, "m".repeat(501), new ByteArrayInputStream(data)))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        assertThatThrownBy(() -> service.upload(ADMIN, "bad\u0000note", new ByteArrayInputStream(data)))
-                .satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        assertThat(filesInDir()).isZero();
-    }
-
-    @Test
-    void 메타데이터_저장에_실패하면_새로_둔_파일을_남기지_않는다() throws IOException {
-        byte[] data = validZip();
-        when(store.findByName("Details")).thenReturn(Optional.empty());
-        when(store.upsert(any(), any(), any(), any(), any(), anyLong(), any(), any())).thenThrow(new IllegalStateException("DB 오류"));
-        when(store.findByPublicId(any())).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.upload(ADMIN, null, new ByteArrayInputStream(data))).isInstanceOf(IllegalStateException.class);
-
-        assertThat(filesInDir()).isZero();
+    void 목록에_없는_항목이나_경로_문자가_섞인_ID_는_거부한다() {
+        assertThatThrownBy(() -> service.manifest("../library")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.file("not-a-uuid", "a")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.manifest("ffffffff-2222-3333-4444-55555555abcd"))
+                .isInstanceOf(BusinessException.class).extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND);
     }
 
     @Test
     void 저장_폴더가_설정되지_않으면_기능이_꺼진다() {
-        LibraryService disabled = new LibraryService("", store);
+        LibraryService disabled = new LibraryService((Path) null, store);
 
-        assertThatThrownBy(() -> disabled.upload(ADMIN, null, new ByteArrayInputStream(new byte[]{1})))
-                .satisfies(t -> assertCode(t, ErrorCode.INTERNAL_SERVER_ERROR));
-        assertThatThrownBy(() -> disabled.download(UUID_A)).satisfies(t -> assertCode(t, ErrorCode.INTERNAL_SERVER_ERROR));
-    }
-
-    // ------------------------------------------------------------------ 받기
-
-    @Test
-    void 목록의_ID_로_저장된_파일을_받는다() throws IOException {
-        when(store.findByPublicId(UUID_A)).thenReturn(Optional.of(entity(UUID_A, "Details")));
-        Files.createDirectories(dir);
-        Files.write(dir.resolve(UUID_A + ".zip"), validZip());
-
-        Resource file = service.download(UUID_A);
-
-        assertThat(file.getFile()).isEqualTo(dir.resolve(UUID_A + ".zip").toFile());
+        assertThatThrownBy(() -> disabled.manifest(ID))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("LIBRARY_DIR");
     }
 
     @Test
-    void 경로가_섞인_ID_로는_받을_수_없다() {
-        for (String id : new String[]{"../../etc/passwd", "..\\x", UUID_A + "/../x", "x", "", UUID_A.toUpperCase(), UUID_A + ".zip"}) {
-            assertThatThrownBy(() -> service.download(id)).as("ID '%s'", id).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));
-        }
-        verify(store, never()).findByPublicId(any());
+    void 지우면_DB_와_파일을_모두_지운다() throws IOException {
+        Files.writeString(dir.resolve(ID + ".zip"), "옛 형식", StandardCharsets.UTF_8);
+
+        service.delete(ID, 1L);
+
+        verify(store).delete(ID);
+        assertThat(dir.resolve(ID)).doesNotExist();
+        assertThat(dir.resolve(ID + ".zip")).doesNotExist();
+        assertThat(dir.resolve("secret.txt")).exists();       // 다른 파일은 건드리지 않는다
     }
 
     @Test
-    void 목록에_없는_ID_나_파일이_사라진_항목은_찾을_수_없다() {
-        when(store.findByPublicId(UUID_A)).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> service.download(UUID_A)).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));
-
-        String other = "9e9e9e9e-2222-3333-4444-55555555abcd";
-        when(store.findByPublicId(other)).thenReturn(Optional.of(entity(other, "Ghost")));
-        assertThatThrownBy(() -> service.download(other)).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));      // 파일 없음
-    }
-
-    // ------------------------------------------------------------------ 삭제·목록
-
-    @Test
-    void 삭제는_기록과_파일을_모두_지운다() throws IOException {
-        when(store.findByPublicId(UUID_A)).thenReturn(Optional.of(entity(UUID_A, "Details")));
-        Files.createDirectories(dir);
-        Files.write(dir.resolve(UUID_A + ".zip"), validZip());
-
-        service.delete(UUID_A, ADMIN);
-
-        verify(store).delete(UUID_A);
-        assertThat(dir.resolve(UUID_A + ".zip")).doesNotExist();
-    }
-
-    @Test
-    void 없는_항목이나_경로가_섞인_ID_는_삭제하지_못한다() {
-        when(store.findByPublicId(UUID_A)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.delete(UUID_A, ADMIN)).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));
-        assertThatThrownBy(() -> service.delete("../../x", ADMIN)).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));
+    void 경로가_섞인_ID_로는_지울_수_없다() {
+        assertThatThrownBy(() -> service.delete("../secret.txt", 1L)).isInstanceOf(BusinessException.class);
         verify(store, never()).delete(any());
+        assertThat(dir.resolve("secret.txt")).exists();
     }
 
     @Test
-    void 목록은_필요한_애드온_문자열을_나눠서_준다() {
-        when(store.findAll()).thenReturn(List.of(entity(UUID_A, "Details")));
-
-        List<LibraryAddonResponse> list = service.list();
-
-        assertThat(list).hasSize(1);
-        assertThat(list.get(0).getRequires()).containsExactly("Lib", "Other");
-        assertThat(list.get(0).getId()).isEqualTo(UUID_A);
-        assertThat(list.get(0).getContentHash()).hasSize(64);
+    void 같이_설치할_애드온은_폴더_이름만_받는다() {
+        assertThatThrownBy(() -> service.setExtraRequires(ID, List.of("../evil")))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("올바른 폴더 이름");
+        assertThatThrownBy(() -> service.setExtraRequires(ID, List.of("a/b"))).isInstanceOf(BusinessException.class);
+        verify(store, never()).updateExtraRequires(eq(ID), any());
     }
 
     @Test
-    void 필요한_애드온이_없는_항목은_빈_목록이다() {
-        LibraryAddonEntity none = LibraryAddonEntity.builder().publicId(UUID_A).name("A").contentHash("a".repeat(64))
-                .fileSize(1).uploadedBy(ADMIN).build();
-        when(store.findAll()).thenReturn(List.of(none));
+    void 같이_설치할_애드온을_지정하면_저장하고_응답에_합쳐_보인다() {
+        LibraryAddonEntity entity = LibraryAddonEntity.builder().publicId(ID).name("Questie").requires("LibA").extraRequires("QuestieDB").build();
+        when(store.updateExtraRequires(ID, "QuestieDB,QuestieTrace")).thenReturn(Optional.of(entity));
 
-        assertThat(service.list().get(0).getRequires()).isEmpty();
-    }
+        LibraryAddonResponse r = service.setExtraRequires(ID, List.of(" QuestieDB ", "QuestieTrace", "QuestieDB"));
 
-    // ------------------------------------------------------------------ 관리자가 지정하는 같이 설치할 애드온
-
-    @Test
-    void 사용자가_받는_같이_설치할_애드온은_toc_것과_관리자_지정의_합집합이다() {
-        LibraryAddonEntity e = LibraryAddonEntity.builder().publicId(UUID_A).name("Questie").contentHash("a".repeat(64))
-                .requires("Lib,QuestieDB").extraRequires("QuestieDB,QuestieTrace,Questie").fileSize(1).uploadedBy(ADMIN).build();
-        when(store.findAll()).thenReturn(List.of(e));
-
-        LibraryAddonResponse r = service.list().get(0);
-
-        assertThat(r.getRequires()).containsExactly("Lib", "QuestieDB", "QuestieTrace");   // 중복 제거, 자기 자신(Questie) 제외
-        assertThat(r.getExtraRequires()).containsExactly("QuestieDB", "QuestieTrace", "Questie");
-    }
-
-    @Test
-    void 관리자가_같이_설치할_애드온을_지정한다() {
-        when(store.updateExtraRequires(eq(UUID_A), eq("QuestieDB,QuestieTrace"))).thenReturn(Optional.of(
-                LibraryAddonEntity.builder().publicId(UUID_A).name("Questie").contentHash("a".repeat(64))
-                        .extraRequires("QuestieDB,QuestieTrace").fileSize(1).uploadedBy(ADMIN).build()));
-
-        LibraryAddonResponse r = service.setExtraRequires(UUID_A, List.of(" QuestieDB ", "QuestieTrace", "QuestieDB"));
-
-        assertThat(r.getRequires()).containsExactly("QuestieDB", "QuestieTrace");
-    }
-
-    @Test
-    void 지정을_비우면_지운다() {
-        when(store.updateExtraRequires(eq(UUID_A), eq((String) null))).thenReturn(Optional.of(entity(UUID_A, "Details")));
-
-        service.setExtraRequires(UUID_A, List.of());
-
-        verify(store).updateExtraRequires(UUID_A, null);
-    }
-
-    @Test
-    void 경로_문자가_섞인_이름이나_너무_많은_지정은_거부한다() {
-        // 진짜 역슬래시("a\\b")와 이름 한가운데의 제어문자("a\u0001b")를 함께 확인한다
-        for (String bad : new String[]{"../evil", "a/b", "a\\b", "a\u0001b", "C:x", "", "  ", "a,b", "x".repeat(101)}) {
-            assertThatThrownBy(() -> service.setExtraRequires(UUID_A, List.of(bad)))
-                    .as("이름 '%s'", bad).satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        }
-        List<String> tooMany = java.util.stream.IntStream.range(0, 31).mapToObj(i -> "A" + i).toList();
-        assertThatThrownBy(() -> service.setExtraRequires(UUID_A, tooMany)).satisfies(t -> assertCode(t, ErrorCode.BAD_REQUEST));
-        verify(store, never()).updateExtraRequires(any(), any());
-    }
-
-    @Test
-    void 없는_항목이나_경로가_섞인_ID_에는_지정할_수_없다() {
-        when(store.updateExtraRequires(eq(UUID_A), any())).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.setExtraRequires(UUID_A, List.of("A"))).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));
-        assertThatThrownBy(() -> service.setExtraRequires("../../x", List.of("A"))).satisfies(t -> assertCode(t, ErrorCode.NOT_FOUND));
+        assertThat(r.getRequires()).containsExactly("LibA", "QuestieDB");
+        assertThat(r.getExtraRequires()).containsExactly("QuestieDB");
     }
 }

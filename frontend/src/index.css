@@ -198,3 +198,38 @@ h1, h2, h3 {
   background: #8a6a2c;
   transform: rotate(45deg);
 }
+
+/* ------------------------------------------------------------------ 편지 (우편함·보관함) */
+/* 줄 쳐진 편지지 */
+.letter {
+  position: relative;
+  border-radius: 4px;
+  border: 1px solid #c9a96a;
+  background:
+    repeating-linear-gradient(transparent 0, transparent 31px, rgba(138, 106, 44, 0.2) 31px, rgba(138, 106, 44, 0.2) 32px),
+    #fbf2d8;
+  box-shadow: 0 6px 18px rgba(80, 50, 15, 0.35), inset 0 0 30px rgba(180, 140, 70, 0.15);
+}
+.letter-body {
+  line-height: 32px;
+  white-space: pre-line;
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: #3b2412;
+}
+/* 붉은 밀랍 도장 */
+.wax-seal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #c93a30, #7a1410 70%);
+  box-shadow: 0 3px 8px rgba(60, 10, 10, 0.5), inset 0 0 0 3px rgba(255, 190, 150, 0.15);
+  font-family: var(--font-logo);
+  font-weight: 700;
+  font-size: 22px;
+  color: #f3d9a0;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
+}

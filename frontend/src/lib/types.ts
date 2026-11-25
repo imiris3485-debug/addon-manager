@@ -77,6 +77,24 @@ export interface Setup {
   /** 공유 대상(만든 사람에게만 내려온다) */
   targets: Person[]
   updatedAt: string | null
+  /** 편지를 보낸 시각 */
+  sentAt: string | null
+  /** 받은 편지를 열어 봤는가(내가 만든 것은 항상 true) */
+  read: boolean
+}
+
+/** 보관함의 기록 하나(내 애드온 목록). 폴더를 다 지워도 이 기록으로 그대로 다시 설치할 수 있다. */
+export interface Snapshot {
+  id: string
+  /** AUTO: 앱이 자동으로 남김 / MANUAL: 이름을 붙여 직접 보관 */
+  source: 'AUTO' | 'MANUAL'
+  label: string | null
+  gameVersion: string | null
+  /** 자료실에 지금 있어 설치할 수 있는 애드온 */
+  addons: string[]
+  /** 기록에는 있지만 자료실에서 사라진 애드온 */
+  missingAddons: string[]
+  createdAt: string | null
 }
 
 export interface Person {

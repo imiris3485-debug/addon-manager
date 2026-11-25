@@ -56,6 +56,8 @@ public final class AddonZipInspector {
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
             // 애드온 코드·데이터
             "lua", "xml", "toc", "json", "yml", "yaml", "cfg", "ini", "csv", "tsv",
+            // 라이브러리에 딸려 오는 개발용 설정(실행되지 않는 데이터 형식. 예: stylua.toml)
+            "toml", "conf", "properties", "xsd", "dtd",
             // 이미지·글꼴·소리
             "tga", "blp", "png", "jpg", "jpeg", "gif", "bmp", "dds", "svg", "webp", "ico",
             "ttf", "otf", "ogg", "mp3", "wav", "flac", "m4a",
@@ -182,13 +184,13 @@ public final class AddonZipInspector {
         return parts;
     }
 
-    private static void checkExtension(String fullName, String fileName) {
+    static void checkExtension(String fullName, String fileName) {
         int dot = fileName.lastIndexOf('.');
         // 확장자가 없는 파일(LICENSE 등)과 점으로 시작하는 파일(.pkgmeta 등)은 허용한다
         if (dot <= 0) return;
         String ext = fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
         if (!ALLOWED_EXTENSIONS.contains(ext)) {
-            throw bad("허용하지 않는 파일 형식이 있습니다: " + shorten(fullName) + " (.lua, .xml, .toc, 이미지, 글꼴, 소리, 문서만 올릴 수 있습니다)");
+            throw bad("허용하지 않는 파일 형식이 있습니다: " + shorten(fullName) + " (.lua, .xml, .toc, 설정 파일, 이미지, 글꼴, 소리, 문서만 올릴 수 있습니다)");
         }
     }
 
@@ -252,6 +254,25 @@ public final class AddonZipInspector {
                 && !FORBIDDEN_CHARS.matcher(name).find() && !name.contains("/") && !name.contains("\\") && !name.contains(",");
     }
 
+    /** 파일로 저장된 .toc 들(폴더 기준 상대 경로)에서 mergeTocs 와 같은 규칙으로 버전과 필요한 애드온을 읽는다. */
+    static Toc mergeTocFiles(Path dataDir, List<String> tocRelPaths) throws IOException {
+        List<String> sorted = new ArrayList<>(tocRelPaths);
+        sorted.sort(Comparator.comparing(p -> baseName(p).toLowerCase(Locale.ROOT)));
+        String version = null;
+        Set<String> requires = new LinkedHashSet<>();
+        for (String rel : sorted) {
+            String text;
+            try (InputStream in = java.nio.file.Files.newInputStream(LibraryLayout.resolveInside(dataDir, rel))) {
+                text = new String(in.readNBytes(MAX_TOC_HEAD_BYTES), StandardCharsets.UTF_8);
+            }
+            Toc toc = parseToc(text);
+            if (version == null && toc.version() != null) version = toc.version();
+            requires.addAll(toc.requires());
+        }
+        List<String> list = new ArrayList<>(requires);
+        return new Toc(version, list.size() > MAX_REQUIRES ? list.subList(0, MAX_REQUIRES) : list);
+    }
+
     /**
      * .toc 의 앞부분만 읽는다. 버전·의존성 같은 메타데이터(## 줄)는 파일 위쪽에 있고, 실제 애드온 중에는
      * 18MB 짜리 .toc 도 있다(QuestieDB). 크다고 거부하면 정상 애드온을 올릴 수 없으므로 앞쪽 일부만 읽는다.
@@ -275,7 +296,7 @@ public final class AddonZipInspector {
         return i < 0 ? path : path.substring(i + 1);
     }
 
-    private static String shorten(String s) {
+    static String shorten(String s) {
         String clean = s.replaceAll("[\\u0000-\\u001f]", "?");
         return clean.length() > 80 ? clean.substring(0, 77) + "..." : clean;
     }

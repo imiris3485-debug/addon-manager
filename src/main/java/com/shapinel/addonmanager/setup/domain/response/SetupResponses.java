@@ -26,6 +26,10 @@ public class SetupResponses {
         private boolean mine;
         private List<PersonResponse> targets;
         private LocalDateTime updatedAt;
+        /** 편지를 보낸 시각 */
+        private LocalDateTime sentAt;
+        /** 받은 편지를 열어 봤는가(내가 만든 세팅은 항상 true) */
+        private boolean read;
     }
 
     /** 공유 대상 후보·대상 한 명. 고정된 소규모 그룹이라 로그인 ID 로 지정한다(순차 PK 는 내보내지 않는다). */

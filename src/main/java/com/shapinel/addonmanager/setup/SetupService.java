@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -53,7 +54,10 @@ public class SetupService {
     @Transactional(readOnly = true)
     public SetupListResponse list(Long accountId) {
         List<AddonSetupEntity> mine = setupRepository.findByOwnerIdOrderByIdDesc(accountId);
-        List<Long> receivedIds = targetRepository.findByAccountId(accountId).stream().map(AddonSetupTargetEntity::getSetupId).toList();
+        List<AddonSetupTargetEntity> myTargets = targetRepository.findByAccountId(accountId);
+        List<Long> receivedIds = myTargets.stream().map(AddonSetupTargetEntity::getSetupId).toList();
+        // 내가 받은 편지 중 연 것
+        Set<Long> readIds = myTargets.stream().filter(t -> t.getReadAt() != null).map(AddonSetupTargetEntity::getSetupId).collect(Collectors.toSet());
         List<AddonSetupEntity> received = receivedIds.isEmpty() ? List.of() : setupRepository.findByIdInOrderByIdDesc(receivedIds);
 
         Set<String> libraryNames = libraryRepository.findByDeletedAtIsNullOrderByNameAsc().stream()
@@ -69,10 +73,10 @@ public class SetupService {
         Map<Long, AccountEntity> accounts = accountRepository.findAllById(accountIds).stream()
                 .collect(Collectors.toMap(AccountEntity::getId, Function.identity()));
 
-        List<SetupResponse> mineOut = mine.stream().map(s -> toResponse(s, true, libraryNames, accounts,
+        List<SetupResponse> mineOut = mine.stream().map(s -> toResponse(s, true, true, libraryNames, accounts,
                 targetsBySetup.getOrDefault(s.getId(), List.of()))).toList();
         // 받은 사람에게는 다른 대상자 목록을 내려주지 않는다
-        List<SetupResponse> receivedOut = received.stream().map(s -> toResponse(s, false, libraryNames, accounts, List.of())).toList();
+        List<SetupResponse> receivedOut = received.stream().map(s -> toResponse(s, false, readIds.contains(s.getId()), libraryNames, accounts, List.of())).toList();
         return new SetupListResponse(mineOut, receivedOut);
     }
 
@@ -104,6 +108,13 @@ public class SetupService {
         targetRepository.flush();
         saveTargets(setup.getId(), clean.targetIds);
         return one(accountId, publicId);
+    }
+
+    /** 받은 편지를 열어 읽음으로 표시한다. 내게 온 편지가 아니면 존재를 알리지 않고 NOT_FOUND. */
+    public void markRead(Long accountId, String publicId) {
+        AddonSetupEntity setup = setupRepository.findByPublicId(publicId).orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND));
+        targetRepository.findBySetupIdAndAccountId(setup.getId(), accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND)).markRead();
     }
 
     public void delete(Long accountId, String publicId) {
@@ -159,7 +170,7 @@ public class SetupService {
         return new Clean(name, description, joined, targetIds);
     }
 
-    private static SetupResponse toResponse(AddonSetupEntity s, boolean mine, Set<String> libraryNames,
+    private static SetupResponse toResponse(AddonSetupEntity s, boolean mine, boolean read, Set<String> libraryNames,
                                             Map<Long, AccountEntity> accounts, List<AddonSetupTargetEntity> targets) {
         List<String> all = Arrays.stream(s.getAddons().split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
         List<String> present = new ArrayList<>();
@@ -172,7 +183,8 @@ public class SetupService {
             if (a != null) targetOut.add(new PersonResponse(a.getLoginId(), a.getName()));
         }
         return new SetupResponse(s.getPublicId(), s.getName(), s.getDescription(), present, missing,
-                owner == null ? "" : owner.getLoginId(), owner == null ? "" : owner.getName(), mine, targetOut, s.getUpdatedAt());
+                owner == null ? "" : owner.getLoginId(), owner == null ? "" : owner.getName(), mine, targetOut, s.getUpdatedAt(),
+                s.getCreatedAt(), read);
     }
 
     private static boolean hasControl(String text, boolean allowNewline) {

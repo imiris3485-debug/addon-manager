@@ -1,5 +1,5 @@
 import { api } from './api'
-import { prepareZip, writePrepared } from './installer'
+import { installAddonFiles } from './installer'
 import type { InstallEvent, LibraryAddon, LocalFolder } from './types'
 
 // ---------------------------------------------------------------------------------------------
@@ -138,8 +138,9 @@ export interface InstallOutcome {
 
 /**
  * 자료실에서 받아 설치한다. 필요한 애드온을 먼저 설치한다.
- * 받은 zip 은 쓰기 전에 **내용 해시가 목록에 적힌 값과 같은지**, 폴더가 목록의 이름과 같은지 확인한다.
- * 전송 중 깨졌거나 목록과 다른 파일이면 PC 의 폴더를 건드리지 않고 멈춘다.
+ * 파일 목록은 쓰기 전에 **내용 해시가 자료실이 알려 준 값과 같은지** 확인하고, 파일마다 내려받은 내용의 크기·SHA-256 을 확인한 뒤에만 쓴다.
+ * 전송 중 깨졌거나 목록과 다른 파일은 쓰지 않고 멈춘다. 도중에 멈추면 폴더가 일부만 새 내용일 수 있지만,
+ * 다시 설치하면 이미 받은 파일은 건너뛰고 이어서 받는다.
  */
 export async function installFromLibrary(
   envId: number,
@@ -153,14 +154,9 @@ export async function installFromLibrary(
   const events: InstallEvent[] = []
   for (const addon of order) {
     onProgress(addon === item ? `설치 중: ${addon.name}` : `필요한 애드온 설치 중: ${addon.name}`)
-    const prepared = await prepareZip(await api.downloadLibrary(addon.id))
-    if (prepared.folders.length !== 1 || prepared.folders[0].toLowerCase() !== addon.name.toLowerCase()) {
-      throw new Error(`'${addon.name}' 파일의 폴더가 목록과 다릅니다. 관리자에게 알려 주세요.`)
-    }
-    if (prepared.hash !== addon.contentHash) {
-      throw new Error(`'${addon.name}' 파일 내용이 목록과 다릅니다(전송 오류일 수 있습니다). 잠시 뒤 다시 시도하세요.`)
-    }
-    const result = await writePrepared(root, prepared)
+    // 파일 목록을 받아 검사하고, 내 폴더와 같은 파일은 그대로 둔 채 바뀐 파일만 내려받아 해시를 확인하며 쓴다
+    const manifest = await api.libraryManifest(addon.id)
+    const result = await installAddonFiles(root, addon.name, manifest, addon.contentHash, (path) => api.libraryFile(addon.id, path), onProgress)
     rememberInstalled(envId, addon.name, result.hash)
     events.push({ addonName: addon.name, action: 'INSTALLED', contentHash: result.hash })   // 처음인지 업데이트인지는 서버가 기록으로 가린다
   }
