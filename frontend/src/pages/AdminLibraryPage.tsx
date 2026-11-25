@@ -4,11 +4,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { formatAgo, formatBytes } from '../lib/format'
-import { buildSyncPlan, uploadFolder, type SyncPlan, type SyncRow } from '../lib/librarySync'
+import { applyDeps, buildSyncPlan, uploadFolder, type SyncPlan, type SyncRow } from '../lib/librarySync'
 import { getLibraryFolder, isDesktop, pickLibraryFolder } from '../lib/nativeFs'
 import type { LibraryAddon } from '../lib/types'
 
-const KIND_LABEL = { NEW: '새로 추가', CHANGED: '내용 바뀜', SAME: '같음' } as const
+const KIND_LABEL = { NEW: '새로 추가', CHANGED: '내용 바뀜', DEPS: '함께 설치 정보 갱신', SAME: '같음' } as const
 
 export default function AdminLibraryPage() {
   const { isAdmin } = useAuth()
@@ -83,7 +83,12 @@ export default function AdminLibraryPage() {
       for (const [i, row] of targets.entries()) {
         setStatus(`올리는 중 (${i + 1}/${targets.length}) ${row.name}`)
         try {
-          await uploadFolder(source.handle, row.name, note.trim())
+          // 내용이 같고 함께 설치할 애드온 정보만 바뀐 항목은 다시 올리지 않는다
+          const saved = row.kind === 'DEPS'
+            ? library?.find((a) => a.name.toLowerCase() === row.name.toLowerCase())
+            : await uploadFolder(source.handle, row.name, note.trim())
+          if (!saved) throw new Error('서버 자료실에서 항목을 찾지 못했습니다.')
+          await applyDeps(saved, row.deps)
           done.add(row.name)
         } catch (e) {
           lines.push(`✖ ${row.name}: ${(e as Error).message}`)
@@ -119,9 +124,26 @@ export default function AdminLibraryPage() {
     apply(next)
   }
 
+  /** 체크하면 함께 설치될 애드온(올릴 것이 있는 것)도 같이 체크한다. 따로 올리지 않으면 사용자가 설치할 때 없는 애드온이 된다. */
+  const toggleRow = (row: SyncRow) => {
+    const next = new Set(upload)
+    if (next.has(row.name)) {
+      next.delete(row.name)
+    } else {
+      next.add(row.name)
+      const pending = new Set((plan?.rows ?? []).filter((r) => r.kind !== 'SAME').map((r) => r.name.toLowerCase()))
+      for (const d of row.deps) {
+        const found = plan?.rows.find((r) => r.name.toLowerCase() === d.toLowerCase())
+        if (found && pending.has(found.name.toLowerCase())) next.add(found.name)
+      }
+    }
+    setUpload(next)
+  }
+
   const counts = plan ? {
     add: plan.rows.filter((r) => r.kind === 'NEW').length,
     changed: plan.rows.filter((r) => r.kind === 'CHANGED').length,
+    deps: plan.rows.filter((r) => r.kind === 'DEPS').length,
     same: plan.rows.filter((r) => r.kind === 'SAME').length,
   } : null
 
@@ -159,13 +181,17 @@ export default function AdminLibraryPage() {
           {plan && counts && (
             <div className="space-y-3">
               <p className="text-sm text-slate-300">
-                새로 추가 <b>{counts.add}</b> · 내용 바뀜 <b>{counts.changed}</b> · 같음 {counts.same} · 원본에서 사라짐 <b>{plan.removed.length}</b>
+                새로 추가 <b>{counts.add}</b> · 내용 바뀜 <b>{counts.changed}</b> · 함께 설치 정보 갱신 <b>{counts.deps}</b> · 같음 {counts.same} · 원본에서 사라짐 <b>{plan.removed.length}</b>
               </p>
               <ul className="max-h-96 space-y-1 overflow-auto">
-                {plan.rows.filter((r) => r.kind !== 'SAME').map((r) => (
-                  <li key={r.name} className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={upload.has(r.name)} disabled={busy} onChange={() => toggle(upload, r.name, setUpload)} />
-                    <span className="min-w-0 flex-1 truncate">{r.name}{r.version && <span className="text-xs text-slate-500"> v{r.version}</span>}</span>
+                {groupRows(plan.rows.filter((r) => r.kind !== 'SAME')).map(({ row: r, child }) => (
+                  <li key={r.name} className={`flex items-center gap-2 text-sm ${child ? 'ml-6' : ''}`}>
+                    <input type="checkbox" checked={upload.has(r.name)} disabled={busy} onChange={() => toggleRow(r)} />
+                    <span className="min-w-0 flex-1 truncate">
+                      {child && <span className="text-slate-600">└ </span>}
+                      {r.name}{r.version && <span className="text-xs text-slate-500"> v{r.version}</span>}
+                      {!child && r.deps.length > 0 && <span className="text-xs text-indigo-300"> · 함께 설치: {r.deps.join(', ')}</span>}
+                    </span>
                     <span className={`rounded px-1.5 py-0.5 text-xs ${r.kind === 'NEW' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>{KIND_LABEL[r.kind]}</span>
                   </li>
                 ))}
@@ -176,7 +202,7 @@ export default function AdminLibraryPage() {
                     <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-xs text-rose-300">원본에서 사라짐 · 서버에서 삭제</span>
                   </li>
                 ))}
-                {counts.add + counts.changed + plan.removed.length === 0 && (
+                {counts.add + counts.changed + counts.deps + plan.removed.length === 0 && (
                   <li className="text-sm text-slate-400">원본 폴더와 자료실이 같습니다. 할 일이 없습니다.</li>
                 )}
               </ul>
@@ -204,6 +230,30 @@ export default function AdminLibraryPage() {
       </div>
     </div>
   )
+}
+
+/**
+ * 함께 설치될 애드온을 그것을 필요로 하는 애드온 바로 아래에 들여써서 묶어 보여 준다.
+ * 어느 애드온의 의존성으로도 쓰이지 않는 것(또는 필요로 하는 쪽이 목록에 없는 것)은 맨 위 항목으로 둔다.
+ */
+function groupRows(rows: SyncRow[]): { row: SyncRow; child: boolean }[] {
+  const byName = new Map(rows.map((r) => [r.name.toLowerCase(), r]))
+  const placed = new Set<string>()
+  const out: { row: SyncRow; child: boolean }[] = []
+  // 의존성이 많은 쪽(묶음의 대표)을 먼저 둔다
+  for (const r of [...rows].sort((a, b) => b.deps.length - a.deps.length || a.name.localeCompare(b.name))) {
+    if (placed.has(r.name.toLowerCase())) continue
+    placed.add(r.name.toLowerCase())
+    out.push({ row: r, child: false })
+    for (const d of r.deps) {
+      const dep = byName.get(d.toLowerCase())
+      if (dep && !placed.has(dep.name.toLowerCase())) {
+        placed.add(dep.name.toLowerCase())
+        out.push({ row: dep, child: true })
+      }
+    }
+  }
+  return out
 }
 
 /** 서버에 올라온 항목 한 줄: 같이 설치할 애드온 지정, 삭제. */

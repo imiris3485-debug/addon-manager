@@ -74,10 +74,12 @@ export interface InstallPlan {
 const MAX_DEPTH = 10
 
 /**
- * 요청한 애드온과, 아직 설치돼 있지 않은 필요한 애드온(의존성의 의존성까지)을 설치 순서대로 정한다.
- * 이미 설치된 것은 버전과 상관없이 충족된 것으로 본다. 순환하거나 같은 애드온이 여러 번 나와도 한 번만 담는다.
+ * 요청한 애드온과, 아직 충족되지 않은 필요한 애드온(의존성의 의존성까지)을 설치 순서대로 정한다.
+ * 충족된 것(satisfied) = 이미 설치돼 있고 자료실과 같은(또는 판단할 수 없어 건드리지 않기로 한) 것.
+ * 설치돼 있어도 자료실에 더 새 내용이 있으면 충족된 것이 아니라서 함께 업데이트한다.
+ * 순환하거나 같은 애드온이 여러 번 나와도 한 번만 담는다.
  */
-export function planInstall(item: LibraryAddon, library: LibraryAddon[], installedNames: Set<string>): InstallPlan {
+export function planInstall(item: LibraryAddon, library: LibraryAddon[], satisfiedNames: Set<string>): InstallPlan {
   const byName = new Map(library.map((a) => [a.name.toLowerCase(), a]))
   const order: LibraryAddon[] = []
   const missing: string[] = []
@@ -90,7 +92,7 @@ export function planInstall(item: LibraryAddon, library: LibraryAddon[], install
     if (depth < MAX_DEPTH) {
       for (const dep of a.requires) {
         const depKey = dep.toLowerCase()
-        if (installedNames.has(depKey)) continue
+        if (satisfiedNames.has(depKey)) continue
         const found = byName.get(depKey)
         if (found) visit(found, depth + 1)
         else if (!missing.includes(dep)) missing.push(dep)
@@ -112,6 +114,21 @@ export async function reportInstalls(envId: number, events: InstallEvent[]): Pro
   }
 }
 
+/**
+ * 이미 충족된 애드온 이름(소문자). 설치돼 있으면서 자료실보다 오래된 것(UPDATE_AVAILABLE)은 뺀다.
+ * 이걸 planInstall 에 넘기면 애드온을 설치·업데이트할 때 오래된 필요한 애드온도 함께 최신으로 올라간다.
+ */
+export function satisfiedNames(library: LibraryAddon[], local: LocalFolder[], hashes: Record<string, string>): Set<string> {
+  const byName = new Map(library.map((a) => [a.name.toLowerCase(), a]))
+  const out = new Set<string>()
+  for (const l of local) {
+    const item = byName.get(l.name.toLowerCase())
+    // 자료실에 없는 폴더는 건드릴 수 없으니 충족된 것으로 본다
+    if (!item || libraryState(item, l, hashes) !== 'UPDATE_AVAILABLE') out.add(l.name.toLowerCase())
+  }
+  return out
+}
+
 export interface InstallOutcome {
   /** 설치한 애드온 이름(필요한 것 포함, 설치 순서) */
   installed: string[]
@@ -129,10 +146,10 @@ export async function installFromLibrary(
   root: FileSystemDirectoryHandle,
   item: LibraryAddon,
   library: LibraryAddon[],
-  installedNames: Set<string>,
+  satisfiedNames: Set<string>,
   onProgress: (message: string) => void,
 ): Promise<InstallOutcome> {
-  const { order, missing } = planInstall(item, library, installedNames)
+  const { order, missing } = planInstall(item, library, satisfiedNames)
   const events: InstallEvent[] = []
   for (const addon of order) {
     onProgress(addon === item ? `설치 중: ${addon.name}` : `필요한 애드온 설치 중: ${addon.name}`)
@@ -145,7 +162,7 @@ export async function installFromLibrary(
     }
     const result = await writePrepared(root, prepared)
     rememberInstalled(envId, addon.name, result.hash)
-    events.push({ addonName: addon.name, action: installedNames.has(addon.name.toLowerCase()) ? 'UPDATED' : 'INSTALLED', contentHash: result.hash })
+    events.push({ addonName: addon.name, action: 'INSTALLED', contentHash: result.hash })   // 처음인지 업데이트인지는 서버가 기록으로 가린다
   }
   await reportInstalls(envId, events)
   return { installed: order.map((a) => a.name), missing }
@@ -174,12 +191,12 @@ export async function applySetup(
   addonNames: string[],
   library: LibraryAddon[],
   local: LocalFolder[],
+  hashes: Record<string, string>,
   onProgress: (message: string) => void,
 ): Promise<SetupApplyOutcome> {
   const byName = new Map(library.map((a) => [a.name.toLowerCase(), a]))
   const localByName = new Map(local.map((l) => [l.name.toLowerCase(), l]))
-  const installedNames = new Set(localByName.keys())
-  const hashes = loadInstalledHashes(envId)
+  const satisfied = satisfiedNames(library, local, hashes)
   const out: SetupApplyOutcome = { installed: [], skipped: [], missing: [], failed: [] }
 
   for (const [i, name] of addonNames.entries()) {
@@ -191,8 +208,8 @@ export async function applySetup(
     if (out.installed.includes(item.name)) continue
     onProgress(`(${i + 1}/${addonNames.length}) ${item.name}`)
     try {
-      const result = await installFromLibrary(envId, root, item, library, installedNames, () => undefined)
-      for (const n of result.installed) { out.installed.push(n); installedNames.add(n.toLowerCase()) }
+      const result = await installFromLibrary(envId, root, item, library, satisfied, () => undefined)
+      for (const n of result.installed) { out.installed.push(n); satisfied.add(n.toLowerCase()) }
       for (const m of result.missing) if (!out.missing.includes(m)) out.missing.push(m)
     } catch (e) {
       out.failed.push({ name: item.name, reason: (e as Error).message })

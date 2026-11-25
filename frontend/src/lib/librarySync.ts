@@ -9,15 +9,18 @@ import type { LibraryAddon } from './types'
 
 const MAX_ZIP_BYTES = 90 * 1024 * 1024        // 서버 상한과 같다
 const MAX_READ_BYTES = 400 * 1024 * 1024
+const MAX_DEPS = 30                           // 서버 상한(함께 설치할 애드온 지정 개수)과 같다
 
-/** NEW: 서버에 없음, CHANGED: 내용이 다름, SAME: 같음 */
-export type SyncKind = 'NEW' | 'CHANGED' | 'SAME'
+/** NEW: 서버에 없음, CHANGED: 내용이 다름, DEPS: 내용은 같지만 함께 설치할 애드온 정보만 갱신, SAME: 같음 */
+export type SyncKind = 'NEW' | 'CHANGED' | 'DEPS' | 'SAME'
 
 export interface SyncRow {
   name: string
   version: string | null
   hash: string
   kind: SyncKind
+  /** 함께 설치할 애드온: .toc 의 필수·선택 의존성 중 원본 폴더에 실제로 있는 것(자기 자신 제외) */
+  deps: string[]
 }
 
 export interface SyncPlan {
@@ -78,12 +81,23 @@ export async function buildSyncPlan(
 ): Promise<SyncPlan> {
   const folders = await scanFolders(source)
   const serverByName = new Map(server.map((s) => [s.name.toLowerCase(), s]))
+  const sourceNames = new Map(folders.map((f) => [f.name.toLowerCase(), f.name]))
   const rows: SyncRow[] = []
   for (const [i, f] of folders.entries()) {
     onProgress(`원본 폴더를 읽는 중 (${i + 1}/${folders.length}) ${f.name}`)
     const hash = await hashFolder(source, f.name)
     const existing = serverByName.get(f.name.toLowerCase())
-    rows.push({ name: f.name, version: f.version, hash, kind: !existing ? 'NEW' : existing.contentHash === hash ? 'SAME' : 'CHANGED' })
+    // OptionalDeps 에는 라이브러리(Ace3 등)가 섞여 있다. 원본 폴더에 애드온으로 같이 있는 것만 묶는다.
+    const deps = [...f.requires, ...f.optionalRequires]
+      .map((d) => sourceNames.get(d.toLowerCase()))
+      .filter((d): d is string => !!d && d.toLowerCase() !== f.name.toLowerCase())
+      .filter((d, idx, all) => all.indexOf(d) === idx)
+      .slice(0, MAX_DEPS)
+    const known = new Set((existing?.requires ?? []).map((r) => r.toLowerCase()))
+    const kind: SyncKind = !existing ? 'NEW'
+      : existing.contentHash !== hash ? 'CHANGED'
+      : deps.some((d) => !known.has(d.toLowerCase())) ? 'DEPS' : 'SAME'
+    rows.push({ name: f.name, version: f.version, hash, kind, deps })
   }
   const present = new Set(folders.map((f) => f.name.toLowerCase()))
   return { rows, removed: server.filter((s) => !present.has(s.name.toLowerCase())) }
@@ -93,4 +107,22 @@ export async function buildSyncPlan(
 export async function uploadFolder(source: FileSystemDirectoryHandle, folder: string, note: string): Promise<LibraryAddon> {
   const zip = await zipFolder(source, folder)
   return api.adminUploadLibrary(note, new Blob([zip as unknown as BlobPart]))
+}
+
+/**
+ * 감지한 함께 설치할 애드온을 서버 항목에 합친다. 관리자가 직접 지정한 값은 지우지 않고 더하기만 한다.
+ * (.toc 가 이미 요구하는 것은 서버가 따로 합치므로 중복해서 넣지 않는다.) 바뀐 게 없으면 서버를 부르지 않는다.
+ */
+export async function applyDeps(item: LibraryAddon, detected: string[]): Promise<LibraryAddon> {
+  const manual = item.extraRequires
+  const fromToc = new Set(item.requires.filter((r) => !manual.includes(r)).map((r) => r.toLowerCase()))
+  const have = new Set(manual.map((r) => r.toLowerCase()))
+  const next = [...manual]
+  for (const d of detected) {
+    if (fromToc.has(d.toLowerCase()) || have.has(d.toLowerCase())) continue
+    next.push(d)
+    have.add(d.toLowerCase())
+  }
+  if (next.length === manual.length) return item
+  return api.adminSetLibraryRequires(item.id, next)
 }

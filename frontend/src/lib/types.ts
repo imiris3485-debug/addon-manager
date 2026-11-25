@@ -56,6 +56,8 @@ export interface LocalFolder {
   name: string
   version: string | null
   requires: string[]
+  /** .toc 의 OptionalDeps(동기화할 때 원본 폴더에 있는 것만 함께 설치로 묶는다) */
+  optionalRequires: string[]
 }
 
 /** 세팅(애드온 묶음). 만든 사람이 지정한 사람에게 공유한다. */

@@ -37,8 +37,8 @@ export async function scanFolders(root: FileSystemDirectoryHandle): Promise<Loca
       const data = await readFileAt(dir, fileName)
       if (data) texts.push({ fileName, text: decoder.decode(data) })
     }
-    const { version, requires } = mergeTocs(texts)
-    result.push({ name, version, requires })
+    const { version, requires, optionalRequires } = mergeTocs(texts)
+    result.push({ name, version, requires, optionalRequires })
   }
   return result.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
 }

@@ -2,8 +2,13 @@ export interface TocInfo {
   version: string | null
   /** `## Interface: 30300` 같은 클라이언트 빌드 번호. 게임 버전 자동 감지에 쓴다. */
   interfaceVersion: number | null
-  /** `## Dependencies:` / `## RequiredDeps:` 가 요구하는 애드온 폴더(필수). OptionalDeps 는 받지 않는다. */
+  /** `## Dependencies:` / `## RequiredDeps:` 가 요구하는 애드온 폴더(필수) */
   requires: string[]
+  /**
+   * `## OptionalDeps:` 의 애드온 폴더. 라이브러리(Ace3, LibStub 등)가 많이 섞여 있어 그대로 설치 대상으로 삼지 않고,
+   * 자료실 원본 폴더에 같이 있는 것만 "함께 설치"로 묶는 데 쓴다(예: Questie 는 QuestieDB·QuestieTrace 를 OptionalDeps 로만 적는다).
+   */
+  optionalRequires: string[]
   /** .toc 가 나열한 파일 경로(폴더 기준 상대 경로, 구분자는 /) */
   files: string[]
 }
@@ -15,7 +20,7 @@ function isSafeFolderName(name: string): boolean {
 
 /** .toc 텍스트를 파싱한다. `## Key: Value` 는 메타데이터, `#` 주석 외의 줄은 로드할 파일이다. */
 export function parseToc(text: string): TocInfo {
-  const info: TocInfo = { version: null, interfaceVersion: null, requires: [], files: [] }
+  const info: TocInfo = { version: null, interfaceVersion: null, requires: [], optionalRequires: [], files: [] }
   for (const raw of text.replace(/^﻿/, '').split(/\r?\n/)) {
     const line = raw.trim()
     if (!line) continue
@@ -33,6 +38,12 @@ export function parseToc(text: string): TocInfo {
         for (const dep of m[2].split(',')) {
           const name = dep.trim()
           if (isSafeFolderName(name) && !info.requires.includes(name)) info.requires.push(name)
+        }
+      }
+      if (key === 'optionaldeps') {
+        for (const dep of m[2].split(',')) {
+          const name = dep.trim()
+          if (isSafeFolderName(name) && !info.optionalRequires.includes(name)) info.optionalRequires.push(name)
         }
       }
       continue
@@ -60,16 +71,18 @@ export function isTocFileFor(folderName: string, fileName: string): boolean {
  * 한 폴더의 여러 .toc 에서 버전과 필요한 애드온을 모은다. 버전은 파일 이름순으로 처음 나온 값,
  * 필요한 애드온은 모든 .toc 의 합집합이다(서버의 자료실 검사와 같은 규칙).
  */
-export function mergeTocs(tocs: { fileName: string; text: string }[]): { version: string | null; requires: string[] } {
+export function mergeTocs(tocs: { fileName: string; text: string }[]): { version: string | null; requires: string[]; optionalRequires: string[] } {
   const sorted = [...tocs].sort((a, b) => a.fileName.toLowerCase().localeCompare(b.fileName.toLowerCase()))
   let version: string | null = null
   const requires: string[] = []
+  const optionalRequires: string[] = []
   for (const t of sorted) {
     const info = parseToc(t.text)
     if (version == null && info.version) version = info.version
     for (const r of info.requires) if (!requires.includes(r)) requires.push(r)
+    for (const r of info.optionalRequires) if (!optionalRequires.includes(r)) optionalRequires.push(r)
   }
-  return { version, requires }
+  return { version, requires, optionalRequires }
 }
 
 /** 여러 폴더 중, 정렬했을 때 처음으로 버전이 있는 값. 서버가 자료실 항목에 기록하는 버전과 같은 규칙이다. */

@@ -4,7 +4,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useEnv } from '../lib/EnvContext'
 import { formatAgo } from '../lib/format'
-import { applySetup, libraryState, loadInstalledHashes, type LibraryState } from '../lib/library'
+import { applySetup, libraryState, type LibraryState } from '../lib/library'
+import { useInstalledHashes } from '../lib/useInstalledHashes'
 import { isDesktop } from '../lib/nativeFs'
 import { scanFolders } from '../lib/scanner'
 import type { LibraryAddon, LocalFolder, Setup, SetupInput } from '../lib/types'
@@ -30,7 +31,7 @@ export default function SetupsPage() {
   const { data: library } = useQuery({ queryKey: ['library'], queryFn: api.library })
   const { data: people } = useQuery({ queryKey: ['setup-people'], queryFn: api.setupPeople })
   // 이 PC 의 AddOns 폴더를 읽어 세팅의 애드온별 설치 상태를 보여 준다(앱에서만)
-  const { data: local, refetch: refetchLocal } = useQuery<LocalFolder[]>({
+  const { data: local, refetch: refetchLocal, dataUpdatedAt } = useQuery<LocalFolder[]>({
     queryKey: ['local-folders', envId],
     queryFn: () => scanFolders(folder.handle!),
     enabled: desktop && envId != null && !!folder.handle,
@@ -44,7 +45,7 @@ export default function SetupsPage() {
 
   const libraryByName = useMemo(() => new Map((library ?? []).map((a) => [a.name.toLowerCase(), a])), [library])
   const localByName = useMemo(() => new Map((local ?? []).map((l) => [l.name.toLowerCase(), l])), [local])
-  const hashes = envId != null ? loadInstalledHashes(envId) : {}
+  const { hashes } = useInstalledHashes(envId, folder.handle, local, library, dataUpdatedAt)
 
   const stateOf = (name: string): LibraryState => {
     const item = libraryByName.get(name.toLowerCase())
@@ -60,7 +61,7 @@ export default function SetupsPage() {
     say('설치를 시작합니다...')
     try {
       const root = await folder.requireAccess()
-      const r = await applySetup(envId, root, s.addons, library, local, say)
+      const r = await applySetup(envId, root, s.addons, library, local, hashes, say)
       const lines = [`설치·업데이트 ${r.installed.length}개${r.installed.length ? `: ${r.installed.join(', ')}` : ''}`]
       if (r.skipped.length > 0) lines.push(`건드리지 않음(이미 최신이거나 직접 설치한 폴더) ${r.skipped.length}개`)
       if (r.missing.length > 0) lines.push(`⚠ 자료실에 없어 설치하지 못함: ${r.missing.join(', ')}`)

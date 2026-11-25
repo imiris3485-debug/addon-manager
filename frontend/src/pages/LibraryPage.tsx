@@ -5,7 +5,8 @@ import { api } from '../lib/api'
 import { useEnv } from '../lib/EnvContext'
 import { formatAgo, formatBytes } from '../lib/format'
 import { removeFolder } from '../lib/installer'
-import { forgetInstalled, installFromLibrary, libraryState, loadInstalledHashes, reportInstalls, type LibraryState } from '../lib/library'
+import { forgetInstalled, installFromLibrary, libraryState, reportInstalls, satisfiedNames, type LibraryState } from '../lib/library'
+import { useInstalledHashes } from '../lib/useInstalledHashes'
 import { isDesktop } from '../lib/nativeFs'
 import { scanFolders } from '../lib/scanner'
 import type { LibraryAddon, LocalFolder } from '../lib/types'
@@ -33,7 +34,7 @@ export default function LibraryPage() {
 
   const { data: library, isLoading, error, refetch: refetchLibrary } = useQuery({ queryKey: ['library'], queryFn: api.library })
   // 이 PC 의 AddOns 폴더를 읽어 설치 상태를 판단한다(앱에서만). 서버와 통신하지 않는다.
-  const { data: local, refetch: refetchLocal, isFetching: scanning } = useQuery<LocalFolder[]>({
+  const { data: local, refetch: refetchLocal, isFetching: scanningFolders, dataUpdatedAt } = useQuery<LocalFolder[]>({
     queryKey: ['local-folders', envId],
     queryFn: () => scanFolders(folder.handle!),
     enabled: desktop && envId != null && !!folder.handle,
@@ -48,7 +49,9 @@ export default function LibraryPage() {
   const [notice, setNotice] = useState<string | null>(null)
 
   const localByName = useMemo(() => new Map((local ?? []).map((l) => [l.name.toLowerCase(), l])), [local])
-  const hashes = envId != null ? loadInstalledHashes(envId) : {}
+  // 폴더의 실제 내용 해시(자료실과 정확히 비교). 설치 기록·버전은 실제 해시를 못 구했을 때의 대비책이다.
+  const { hashes, hashing } = useInstalledHashes(envId, folder.handle, local, library, dataUpdatedAt)
+  const scanning = scanningFolders || hashing
   const libraryNames = useMemo(() => new Set((library ?? []).map((a) => a.name.toLowerCase())), [library])
 
   const rows = useMemo(() => {
@@ -62,9 +65,8 @@ export default function LibraryPage() {
         if (filter === 'INSTALLED') return state !== 'NOT_INSTALLED'
         return state === 'UPDATE_AVAILABLE'
       })
-    // hashes 는 렌더마다 localStorage 에서 읽는 값이라 local 이 바뀔 때 함께 다시 계산한다
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [library, localByName, query, filter, desktop, local])
+  }, [library, localByName, query, filter, desktop, local, hashes])
 
   const outdated = rows.filter((r) => r.state === 'UPDATE_AVAILABLE').map((r) => r.item)
   const libraryByName = useMemo(() => new Map((library ?? []).map((a) => [a.name.toLowerCase(), a])), [library])
@@ -78,9 +80,8 @@ export default function LibraryPage() {
         return { folder: l, item, state: item ? libraryState(item, l, hashes) : null }
       })
       .sort((a, b) => a.folder.name.localeCompare(b.folder.name))
-    // hashes 는 렌더마다 localStorage 에서 읽는 값이라 local 이 바뀔 때 함께 다시 계산한다
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [local, libraryByName, query])
+  }, [local, libraryByName, query, hashes])
 
   const install = async (item: LibraryAddon) => {
     if (envId == null || !library) return
@@ -89,11 +90,11 @@ export default function LibraryPage() {
     say('설치 중...')
     try {
       const root = await folder.requireAccess()
-      const installedNames = new Set(localByName.keys())
-      const result = await installFromLibrary(envId, root, item, library, installedNames, say)
+      // 필요한 애드온이 설치돼 있어도 자료실보다 오래됐으면 함께 업데이트한다
+      const result = await installFromLibrary(envId, root, item, library, satisfiedNames(library, local ?? [], hashes), say)
       const extra = result.installed.filter((n) => n !== item.name)
       const lines = ['설치 완료']
-      if (extra.length > 0) lines.push(`함께 설치했습니다: ${extra.join(', ')}`)
+      if (extra.length > 0) lines.push(`함께 설치·업데이트했습니다: ${extra.join(', ')}`)
       if (result.missing.length > 0) lines.push(`⚠ 자료실에 없어 설치하지 못한 필요한 애드온: ${result.missing.join(', ')}`)
       say(lines.join('\n'))
       await refetchLocal()
@@ -111,10 +112,17 @@ export default function LibraryPage() {
     let failed = 0
     try {
       const root = await folder.requireAccess()
+      const satisfied = satisfiedNames(library, local ?? [], hashes)
       for (const [i, item] of outdated.entries()) {
+        // 앞 항목을 업데이트하면서 함께 최신이 된 것은 다시 받지 않는다
+        if (satisfied.has(item.name.toLowerCase())) {
+          setMessage((m) => ({ ...m, [item.name]: '업데이트 완료(함께 업데이트됨)' }))
+          continue
+        }
         setMessage((m) => ({ ...m, [item.name]: `업데이트 중 (${i + 1}/${outdated.length})...` }))
         try {
-          await installFromLibrary(envId, root, item, library, new Set(localByName.keys()), () => undefined)
+          const r = await installFromLibrary(envId, root, item, library, satisfied, () => undefined)
+          for (const n of r.installed) satisfied.add(n.toLowerCase())
           setMessage((m) => ({ ...m, [item.name]: '업데이트 완료' }))
         } catch (e) {
           failed++
@@ -280,9 +288,9 @@ export default function LibraryPage() {
                     )}
                   </div>
                   <div className="flex gap-2">
-                    {item && state !== 'UP_TO_DATE' && (
-                      <button className="btn btn-primary" disabled={busy !== null || !folder.handle} onClick={() => install(item)}>
-                        {state === 'UPDATE_AVAILABLE' ? '업데이트' : '자료실 것으로 설치'}
+                    {item && (
+                      <button className={`btn ${state === 'UP_TO_DATE' ? '' : 'btn-primary'}`} disabled={busy !== null || !folder.handle} onClick={() => install(item)}>
+                        {state === 'UPDATE_AVAILABLE' ? '업데이트' : state === 'UP_TO_DATE' ? '다시 설치' : '자료실 것으로 설치'}
                       </button>
                     )}
                     <button className="btn btn-danger" disabled={busy !== null || !folder.handle}
